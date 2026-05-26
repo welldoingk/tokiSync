@@ -204,23 +204,45 @@ export class GenericParser extends BaseParser {
         if (viewerCfg.imageRegex) {
             const html = iframeDocument.documentElement.innerHTML || iframeDocument.body.innerHTML;
             const regex = new RegExp(viewerCfg.imageRegex, 'g');
+
+            // [custom] URL 차단 패턴 — Regex 경로에서도 적용 (DOM 추출 경로와 동일 의미론)
+            const urlExcludeRawRegex = viewerCfg.urlExclude || viewerCfg.urlBlocklist;
+            const urlExcludeListRegex = urlExcludeRawRegex
+                ? (Array.isArray(urlExcludeRawRegex) ? urlExcludeRawRegex : [urlExcludeRawRegex])
+                : [];
+            const isUrlBlockedRegex = (url) => {
+                if (!url) return false;
+                return urlExcludeListRegex.some(p => {
+                    if (typeof p !== 'string') return false;
+                    if (p.length > 2 && p.startsWith('/') && p.endsWith('/')) {
+                        try { return new RegExp(p.slice(1, -1)).test(url); } catch (e) { return false; }
+                    }
+                    return url.includes(p);
+                });
+            };
+
             const urls = [];
+            let blockedCount = 0;
             let match;
-            
+
             while ((match = regex.exec(html)) !== null) {
                 // 캡처 그룹이 있으면 그것을, 없으면 전체 매치(match[0])를 사용
                 let url = match[1] || match[0];
                 url = url.replace(/\\/g, ''); // 불필요한 이스케이프 백슬래시(\) 제거
-                
-                if (!this.isDummyUrl(url)) {
-                    urls.push(this.getAbsoluteUrl(url));
-                }
+
+                if (this.isDummyUrl(url)) continue;
+                if (isUrlBlockedRegex(url)) { blockedCount++; continue; }
+                urls.push(this.getAbsoluteUrl(url));
             }
-            
+
             // 중복 제거 후 리턴 (정규식 특성상 중복 캡처 가능성 높음)
             const uniqueUrls = Array.from(new Set(urls));
             if (uniqueUrls.length > 0) {
-                console.log(`[GenericParser] Regex 기반 이미지 추출 성공: ${uniqueUrls.length}개 발견`);
+                if (blockedCount > 0) {
+                    console.log(`[GenericParser] Regex 기반 ${uniqueUrls.length}개 추출, urlExclude로 ${blockedCount}개 차단`);
+                } else {
+                    console.log(`[GenericParser] Regex 기반 이미지 추출 성공: ${uniqueUrls.length}개 발견`);
+                }
                 return uniqueUrls.map(url => ({ url, isDummy: false }));
             } else {
                 console.warn(`[GenericParser] Regex 설정이 있으나 매칭되는 이미지를 찾지 못했습니다.`);
