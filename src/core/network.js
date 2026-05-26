@@ -491,6 +491,107 @@ export async function uploadDirect(blob, folderName, fileName, metadata = {}) {
 export const getOAuthToken = getToken;
 
 /**
+ * [custom] updateDirect — 기존 Drive 파일 ID에 직접 PATCH (GAS Relay 우회)
+ * - <= 30MB : single PATCH /uploadType=media (1 round-trip)
+ * - >  30MB : resumable PATCH (50MB chunks)
+ * Base64 인코딩 없음, GAS 우회로 PUT 업로드 60~70% 단축 기대.
+ *
+ * @param {string} fileId Google Drive file ID
+ * @param {Blob}   blob   payload
+ * @param {string} fileName  (logging only)
+ * @returns {Promise<void>}
+ */
+export async function updateDirect(fileId, blob, fileName = '') {
+    const token = await getToken();
+    const size = blob.size;
+    const contentType = blob.type || 'application/zip';
+    const MULTIPART_THRESHOLD = 30 * 1024 * 1024;
+
+    console.log(`[updateDirect] PATCH ${fileName} (${size} bytes) → fileId=${fileId}`);
+
+    if (size <= MULTIPART_THRESHOLD) {
+        // 단일 PATCH — 최단 경로
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: 'PATCH',
+                url: `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': contentType
+                },
+                data: blob,
+                timeout: 300000,
+                onload: (resp) => {
+                    if (resp.status >= 200 && resp.status < 300) {
+                        console.log(`[updateDirect] ✅ single PATCH ${resp.status} (${size} bytes)`);
+                        resolve();
+                    } else {
+                        reject(new Error(`PATCH failed: ${resp.status} ${(resp.responseText || '').slice(0, 200)}`));
+                    }
+                },
+                onerror: (err) => reject(new Error('Network error during PATCH: ' + (err?.error || 'unknown')))
+            });
+        });
+    }
+
+    // resumable PATCH — 큰 파일
+    const sessionUrl = await new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+            method: 'PATCH',
+            url: `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=resumable`,
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json; charset=UTF-8',
+                'X-Upload-Content-Length': String(size),
+                'X-Upload-Content-Type': contentType
+            },
+            data: '{}',
+            timeout: 30000,
+            onload: (resp) => {
+                if (resp.status < 200 || resp.status >= 300) {
+                    return reject(new Error(`Resumable init failed: ${resp.status}`));
+                }
+                const loc = (resp.responseHeaders || '').match(/^Location:\s*(.+)$/im)?.[1]?.trim();
+                if (!loc) return reject(new Error('No Location header in resumable init'));
+                resolve(loc);
+            },
+            onerror: (err) => reject(new Error('Network error during resumable init'))
+        });
+    });
+
+    const CHUNK = 50 * 1024 * 1024;
+    let start = 0;
+    while (start < size) {
+        const end = Math.min(start + CHUNK, size);
+        const chunkBlob = blob.slice(start, end);
+        await new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: 'PUT',
+                url: sessionUrl,
+                headers: {
+                    'Content-Range': `bytes ${start}-${end - 1}/${size}`,
+                    'Content-Type': contentType
+                },
+                data: chunkBlob,
+                timeout: 600000,
+                onload: (resp) => {
+                    // 308 = resume incomplete (more chunks expected); 200/201 = complete
+                    if (resp.status === 308 || (resp.status >= 200 && resp.status < 300)) {
+                        console.log(`[updateDirect] chunk PUT ${start}-${end - 1} OK (${resp.status})`);
+                        resolve();
+                    } else {
+                        reject(new Error(`Chunk PUT failed: ${resp.status} ${(resp.responseText || '').slice(0, 200)}`));
+                    }
+                },
+                onerror: (err) => reject(new Error('Network error during chunk PUT'))
+            });
+        });
+        start = end;
+    }
+    console.log(`[updateDirect] ✅ resumable PATCH 완료 (${size} bytes)`);
+}
+
+/**
  * [v1.7.4] Direct History Fetch with Size Heuristic
  * Bypasses GAS relay and directly queries the Google Drive API for the series folder.
  * Automatically filters out corrupted/incomplete files using the `(Max + Min) / 2 * 0.5` heuristic.

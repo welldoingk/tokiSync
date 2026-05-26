@@ -9,7 +9,7 @@ import { LogBox, Notifier, tokiAlert, tokiConfirm } from './ui.js';
 import { getConfig, isConfigValid, getCbzCompression, getConcurrency } from './config.js';
 import { startSilentAudio, stopSilentAudio } from './anti_sleep.js';
 import { fetchHistory, refreshCacheAfterUpload, getBooksByCacheId, initUpdateUploadViaGASRelay, getMergeIndexFragment } from './gas.js';
-import { fetchHistoryDirect, checkSingleHistoryDirect } from './network.js';
+import { fetchHistoryDirect, checkSingleHistoryDirect, updateDirect } from './network.js';
 import { fetchNovelText, fetchComicImages, closeActivePopup } from './novel-decryptor.js';
 
 // Sleep Policy Presets
@@ -588,59 +588,60 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
 
                     if (destination === 'drive' && cachedFileId) {
                         try {
-                            logger.log(`⚡ [Fast Path] 캐시 히트! 무탐색 덮어쓰기 (PUT) 진행 -> ID: ${cachedFileId}`);
-                            
-                            // 1. Init Update Session
-                            // Notice: We do NOT use direct upload here because direct upload deletes existing files.
-                            // We MUST use GAS Relay to trigger the specific PATCH/PUT resumable session.
-                            const updateUrl = await initUpdateUploadViaGASRelay(cachedFileId, `${fullFilename}.${extension}`);
-                            
-                            // 2. Transmit chunks (re-use standard GM_xmlHttpRequest logic from gas.js)
-                            // We can build a quick uploader here or expose a method. Since gas.js encapsulates it tightly,
-                            // we inline the chunk upload for the Fast Path for maximum control:
-                            const CHUNK_SIZE = 20 * 1024 * 1024;
-                            const totalSize = blob.size;
-                            let start = 0;
-                            const buffer = await blob.arrayBuffer();
-                            
-                            while (start < totalSize) {
-                                const end = Math.min(start + CHUNK_SIZE, totalSize);
-                                const chunkBuffer = buffer.slice(start, end);
-                                const bytes = new Uint8Array(chunkBuffer);
-                                
-                                // High-speed Base64 encode
-                                let binary = "";
-                                const chunk_size = 0x8000; // 32KB
-                                for (let j = 0; j < bytes.length; j += chunk_size) {
-                                    binary += String.fromCharCode.apply(null, bytes.subarray(j, j + chunk_size));
-                                }
-                                const chunkBase64 = window.btoa(binary);
+                            logger.log(`⚡ [Fast Path] 캐시 히트! Direct PATCH 진행 -> ID: ${cachedFileId} (${(blob.size/1024/1024).toFixed(1)}MB)`);
 
-                                await new Promise((res, rej) => {
-                                    GM_xmlhttpRequest({
-                                        method: "POST", url: getConfig().gasUrl,
-                                            data: JSON.stringify({ 
-                                                type: "upload", uploadUrl: updateUrl, chunkData: chunkBase64, 
+                            // [custom] Drive PATCH 직행 — GAS Relay + Base64 우회
+                            // <=30MB single PATCH, >30MB resumable PATCH
+                            try {
+                                await updateDirect(cachedFileId, blob, `${fullFilename}.${extension}`);
+                                logger.success(`⚡ [Fast Path] ${fullFilename} Direct PATCH 완료!`, 'FastPath');
+                                success = true;
+                            } catch (directErr) {
+                                // Direct 실패 시 GAS Relay 폴백 (안전망)
+                                logger.warn(`⚠️ [Fast Path] Direct PATCH 실패 (${directErr.message}) → GAS Relay 폴백`, 'FastPath');
+                                const updateUrl = await initUpdateUploadViaGASRelay(cachedFileId, `${fullFilename}.${extension}`);
+                                const CHUNK_SIZE = 20 * 1024 * 1024;
+                                const totalSize = blob.size;
+                                let start = 0;
+                                const buffer = await blob.arrayBuffer();
+
+                                while (start < totalSize) {
+                                    const end = Math.min(start + CHUNK_SIZE, totalSize);
+                                    const chunkBuffer = buffer.slice(start, end);
+                                    const bytes = new Uint8Array(chunkBuffer);
+
+                                    let binary = "";
+                                    const chunk_size = 0x8000;
+                                    for (let j = 0; j < bytes.length; j += chunk_size) {
+                                        binary += String.fromCharCode.apply(null, bytes.subarray(j, j + chunk_size));
+                                    }
+                                    const chunkBase64 = window.btoa(binary);
+
+                                    await new Promise((res, rej) => {
+                                        GM_xmlhttpRequest({
+                                            method: "POST", url: getConfig().gasUrl,
+                                            data: JSON.stringify({
+                                                type: "upload", uploadUrl: updateUrl, chunkData: chunkBase64,
                                                 folderId: getConfig().folderId,
                                                 protocolVersion: 3,
                                                 start: start, end: end, total: totalSize, apiKey: getConfig().apiKey
                                             }),
-                                        headers: { "Content-Type": "text/plain" },
-                                        timeout: 300000,
-                                        onload: (resp) => {
-                                            try { 
-                                                const json = JSON.parse(resp.responseText); 
-                                                if (json.status === 'success') res(); else rej(new Error("Fail")); 
-                                            } catch (e) { rej(e); }
-                                        },
-                                        onerror: rej
+                                            headers: { "Content-Type": "text/plain" },
+                                            timeout: 300000,
+                                            onload: (resp) => {
+                                                try {
+                                                    const json = JSON.parse(resp.responseText);
+                                                    if (json.status === 'success') res(); else rej(new Error("Fail"));
+                                                } catch (e) { rej(e); }
+                                            },
+                                            onerror: rej
+                                        });
                                     });
-                                });
-                                start = end;
+                                    start = end;
+                                }
+                                logger.success(`⚡ [Fast Path] ${fullFilename} GAS Relay 폴백 완료`, 'FastPath');
+                                success = true;
                             }
-                            
-                            logger.success(`⚡ [Fast Path] ${fullFilename} 업데이트(PUT) 완료!`, 'FastPath');
-                            success = true;
                         } catch (fastPathErr) {
                             const errMsg = fastPathErr.message || "";
                             logger.log(`⚠️ Fast Path 업로드 중 에러 발생 (${errMsg}), Fallback 시작...`, 'warn', 'FastPath');
