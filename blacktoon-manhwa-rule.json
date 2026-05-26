@@ -1,0 +1,33 @@
+[
+  {
+    "id": "blacktoon_manhwa_custom",
+    "name": "블랙툰 만화 (광고 필터 + 가속)",
+    "urlPattern": ".*/manhwa/.*",
+    "category": "Manga",
+    "meta": {
+      "title": "h1.hero-v2-title",
+      "author": "div.hero-v2-author",
+      "thumb": { "selector": "div.hero-v2-thumb > img", "attr": "src" },
+      "status": "span.pill-status",
+      "tags": "div.hero-v2-tags"
+    },
+    "list": {
+      "container": "ul.ep-list-v2",
+      "item": "li.ep-row-v2",
+      "num": "span.ep-row-v2-no",
+      "title": ".ep-row-v2-title strong",
+      "sub": { "selector": "span.sub", "regex": "\\[(.*?)\\]" },
+      "link": { "selector": "a.ep-row-v2-link", "attr": "href" },
+      "date": "span.ep-row-v2-date"
+    },
+    "viewer": {
+      "imageContainer": ".vw-imgs",
+      "imageItem": "img",
+      "imageRegex": "https?://[a-zA-Z0-9.-]+\\.toonflix\\.app/manhwa/[^\"'\\s\\\\]+\\.(?:jpg|jpeg|png|webp)",
+      "scrollStallTimeoutMs": 5000,
+      "lazyAttrOptions": ["data-src", "data-lazy", "src"],
+      "exclude": ["[data-brs=\"header\"]", "button[data-bs]"],
+      "urlExclude": ["/board_uploads/"]
+    }
+  }
+]
