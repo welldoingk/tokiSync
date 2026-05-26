@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>TokiSync — Rule Debug</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 13px/1.5 system-ui, sans-serif; margin: 0; padding: 16px; max-width: 1200px; }
+  h1 { margin: 0 0 8px; font-size: 18px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+  fieldset { border: 1px solid #888; border-radius: 6px; padding: 10px; }
+  legend { font-weight: 600; padding: 0 6px; }
+  textarea, input[type=text] { width: 100%; box-sizing: border-box; font: 12px/1.4 ui-monospace, monospace; padding: 6px; }
+  textarea { min-height: 140px; }
+  button { padding: 6px 12px; font-weight: 600; cursor: pointer; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 8px 0; }
+  .stat { padding: 8px; background: #0001; border-radius: 4px; }
+  .stat b { font-size: 18px; display: block; }
+  .stat.ok { background: #1a73e810; }
+  .stat.warn { background: #ea443510; }
+  .stat.drop { background: #fbbc0410; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { padding: 4px 8px; border-bottom: 1px solid #8884; text-align: left; vertical-align: top; }
+  th { background: #0001; }
+  td.thumb img { max-height: 40px; max-width: 60px; object-fit: contain; }
+  td.url { font-family: ui-monospace, monospace; word-break: break-all; max-width: 360px; }
+  .badge { display: inline-block; padding: 1px 6px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .badge.keep { background: #34a85333; color: #1e7e34; }
+  .badge.drop { background: #ea443533; color: #b71c1c; }
+  .badge.dummy { background: #fbbc0433; color: #856404; }
+  pre.log { background: #0001; padding: 8px; border-radius: 4px; max-height: 220px; overflow: auto; font-size: 11px; white-space: pre-wrap; }
+  details { margin-top: 8px; }
+  summary { cursor: pointer; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>TokiSync — 룰 디버그 페이지</h1>
+<p style="margin:4px 0 12px;color:#666">저장된 페이지(예: sam2.html)에 사이트 룰(viewer 블록)을 적용해 어떤 이미지가 잡히고 어떤 게 제외되는지 미리 확인합니다.</p>
+
+<div class="row">
+  <fieldset>
+    <legend>1. HTML 소스</legend>
+    <label>저장된 HTML 파일 (이 서버의 같은 폴더):</label>
+    <input type="text" id="srcUrl" value="./sam2.html" />
+    <div style="margin-top:6px;display:flex;gap:6px;align-items:center">
+      <button id="btnLoad">불러오기</button>
+      <label style="font-size:12px"><input type="file" id="filePick" accept=".html,text/html" /></label>
+    </div>
+    <details><summary>또는 HTML 직접 붙여넣기</summary>
+      <textarea id="rawHtml" placeholder="<html>...</html>" style="margin-top:6px"></textarea>
+    </details>
+  </fieldset>
+
+  <fieldset>
+    <legend>2. 사이트 룰 (viewer 블록)</legend>
+    <textarea id="ruleJson">{
+  "imageContainer": ".vw-imgs",
+  "imageItem": "img",
+  "exclude": ["[data-brs=\"header\"]", "button[data-bs]"],
+  "lazyAttrOptions": ["data-src", "data-lazy", "src"]
+}</textarea>
+    <button id="btnRun" style="margin-top:6px">▶ 분석 실행</button>
+  </fieldset>
+</div>
+
+<fieldset>
+  <legend>결과</legend>
+  <div class="stats" id="stats"></div>
+  <pre class="log" id="log"></pre>
+  <details open><summary>이미지 상세 (keep / drop)</summary>
+    <table id="tbl">
+      <thead><tr><th>#</th><th>상태</th><th>위치(closest)</th><th class="url">URL</th><th class="thumb">미리보기</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </details>
+</fieldset>
+
+<script>
+const $ = id => document.getElementById(id);
+const log = (msg) => { $('log').textContent += msg + '\n'; };
+const clearLog = () => { $('log').textContent = ''; };
+
+async function loadFromUrl() {
+  clearLog();
+  const url = $('srcUrl').value.trim();
+  if (!url) return;
+  log(`[load] fetching ${url}`);
+  try {
+    const r = await fetch(url);
+    const html = await r.text();
+    $('rawHtml').value = html;
+    log(`[load] ${(html.length/1024).toFixed(1)} KB 로드 완료`);
+  } catch (e) {
+    log(`[load] 실패: ${e.message}`);
+  }
+}
+
+$('btnLoad').addEventListener('click', loadFromUrl);
+$('filePick').addEventListener('change', async (ev) => {
+  const f = ev.target.files[0];
+  if (!f) return;
+  clearLog();
+  const txt = await f.text();
+  $('rawHtml').value = txt;
+  log(`[load] 파일 ${f.name} (${(txt.length/1024).toFixed(1)} KB) 로드 완료`);
+});
+
+function isDummyUrl(url) {
+  if (!url) return true;
+  if (url.startsWith('data:image')) return true;
+  const l = url.toLowerCase();
+  const dummies = ['blank.gif','loading.gif','loading-image.gif','pixel.gif','spacer.gif','transparent.gif','1x1.gif','dot.gif'];
+  if (dummies.some(p => l.includes(p))) return true;
+  if (/\/img\/(loading|placeholder)/.test(l)) return true;
+  return false;
+}
+
+function selectorOf(el) {
+  if (!el) return '';
+  const parts = [];
+  let n = el;
+  for (let i = 0; i < 3 && n && n.tagName; i++) {
+    let s = n.tagName.toLowerCase();
+    if (n.id) s += '#' + n.id;
+    if (n.className && typeof n.className === 'string') {
+      const cls = n.className.trim().split(/\s+/).slice(0,2).map(c => '.'+c).join('');
+      s += cls;
+    }
+    parts.unshift(s);
+    n = n.parentElement;
+  }
+  return parts.join(' > ');
+}
+
+function run() {
+  clearLog();
+  const html = $('rawHtml').value;
+  if (!html) { log('[run] HTML이 비어있음 — 먼저 불러오기'); return; }
+
+  let rule;
+  try { rule = JSON.parse($('ruleJson').value); }
+  catch (e) { log('[run] 룰 JSON 파싱 실패: ' + e.message); return; }
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+
+  const totalImgs = doc.querySelectorAll('img').length;
+  log(`[doc] 총 <img> 태그: ${totalImgs}개`);
+
+  // 1) container
+  let container = doc;
+  if (rule.imageContainer) {
+    container = doc.querySelector(rule.imageContainer);
+    if (!container) {
+      log(`[container] ❌ '${rule.imageContainer}' DOM에서 못 찾음`);
+      render([], 0, totalImgs, 0);
+      return;
+    }
+    log(`[container] ✅ '${rule.imageContainer}' 발견`);
+  } else {
+    log(`[container] (지정 없음) — 문서 전체 사용`);
+  }
+
+  // 2) imageItem 매칭
+  const itemSel = rule.imageItem || 'img';
+  const matched = Array.from(container.querySelectorAll(itemSel));
+  log(`[match] '${itemSel}' → ${matched.length}개`);
+
+  // 3) exclude
+  const excludeRule = rule.exclude || rule.remove;
+  const excludeSelectors = excludeRule
+    ? (Array.isArray(excludeRule) ? excludeRule : [excludeRule])
+    : [];
+  if (excludeSelectors.length) log(`[exclude] selectors: ${excludeSelectors.join(' , ')}`);
+
+  // 4) per-image judgement
+  const lazyAttrs = rule.lazyAttrOptions || ['data-src','data-lazy','src'];
+  const rows = matched.map(img => {
+    const droppedBy = excludeSelectors.find(sel => { try { return !!img.closest(sel); } catch (e) { return false; } });
+    let url = '';
+    for (const a of lazyAttrs) { const v = img.getAttribute(a); if (v) { url = v; break; } }
+    if (!url) url = img.getAttribute('src') || '';
+    const dummy = isDummyUrl(url);
+    let status = 'keep';
+    if (droppedBy) status = 'drop:exclude';
+    else if (dummy) status = 'drop:dummy';
+    else if (!url) status = 'drop:no-url';
+    return { img, url, status, droppedBy };
+  });
+
+  const kept = rows.filter(r => r.status === 'keep');
+  const droppedExclude = rows.filter(r => r.status === 'drop:exclude').length;
+  const droppedDummy = rows.filter(r => r.status === 'drop:dummy').length;
+  const droppedEmpty = rows.filter(r => r.status === 'drop:no-url').length;
+
+  log(`[result] keep=${kept.length}  drop_exclude=${droppedExclude}  drop_dummy=${droppedDummy}  drop_no_url=${droppedEmpty}`);
+  render(rows, totalImgs, matched.length, kept.length);
+}
+
+function render(rows, totalImgs, matchedCount, keepCount) {
+  const stats = [
+    { cls: '',     label: '문서 전체 img', val: totalImgs },
+    { cls: '',     label: 'selector 매치', val: matchedCount },
+    { cls: 'drop', label: 'exclude/dummy 제외', val: matchedCount - keepCount },
+    { cls: 'ok',   label: '최종 다운로드', val: keepCount },
+  ];
+  $('stats').innerHTML = stats.map(s => `<div class="stat ${s.cls}"><b>${s.val}</b>${s.label}</div>`).join('');
+
+  const tbody = $('tbl').querySelector('tbody');
+  tbody.innerHTML = '';
+  rows.forEach((r, i) => {
+    const tr = document.createElement('tr');
+    const badge = r.status === 'keep'
+      ? '<span class="badge keep">KEEP</span>'
+      : r.status === 'drop:exclude'
+        ? `<span class="badge drop">EXCLUDE</span><br><small>${r.droppedBy}</small>`
+        : r.status === 'drop:dummy'
+          ? '<span class="badge dummy">DUMMY</span>'
+          : '<span class="badge drop">NO URL</span>';
+    tr.innerHTML = `<td>${i+1}</td>
+      <td>${badge}</td>
+      <td><code>${selectorOf(r.img)}</code></td>
+      <td class="url">${r.url || '<em>-</em>'}</td>
+      <td class="thumb">${r.url ? `<img src="${r.url}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.opacity=.2">` : ''}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+$('btnRun').addEventListener('click', run);
+
+// 초기 자동 로드
+loadFromUrl();
+</script>
+</body>
+</html>
