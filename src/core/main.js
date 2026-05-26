@@ -1,6 +1,6 @@
 import { tokiDownload, processItem } from './downloader.js';
 import { detectSite, getMaxEpisodes, parseEpisodeRange } from './detector.js'; 
-import { showConfigModal, getConfig, setConfig, isConfigValid, CFG_GLOBAL_URL_EXCLUDE, getGlobalUrlExcludeList } from './config.js';
+import { showConfigModal, getConfig, setConfig, isConfigValid, CFG_GLOBAL_URL_EXCLUDE, getGlobalUrlExcludeList, CFG_CBZ_COMPRESSION, CFG_CONCURRENCY, getCbzCompression, getConcurrency } from './config.js';
 import { LogBox, markDownloadedItems, MenuModal, TreeRuleEditor, showRuleDebugModal } from './ui.js';
 import { extractEpisodeData } from './extractor.js';
 import { EpubBuilder } from './epub.js';
@@ -164,6 +164,41 @@ export async function main() {
         });
         GM_registerMenuCommand('📂 파일명 표준화 (Migration)', runFilenameMigration);
         GM_registerMenuCommand('🔍 룰 디버그 (현재 페이지)', () => showRuleDebugModal());
+        GM_registerMenuCommand(`📦 CBZ 압축 모드 (현재: ${getCbzCompression()})`, () => {
+            const cur = getCbzCompression();
+            const next = cur === 'STORE' ? 'DEFLATE' : 'STORE';
+            const ok = confirm(
+                `CBZ 압축 모드를 ${cur} → ${next} 로 변경합니다.\n\n` +
+                `• DEFLATE: 파일 작음, 느림 (기본)\n` +
+                `• STORE:   파일 큼, ZIP 빌드 30~50% 빠름\n\n` +
+                `계속하시겠습니까?`
+            );
+            if (ok && typeof GM_setValue !== 'undefined') {
+                GM_setValue(CFG_CBZ_COMPRESSION, next);
+                alert(`✅ CBZ 압축 모드: ${next}\n페이지 새로고침 후 적용됩니다.`);
+            }
+        });
+        GM_registerMenuCommand(`⚡ 회차 동시 처리 수 (현재: ${getConcurrency()})`, () => {
+            const cur = getConcurrency();
+            const input = prompt(
+                `한 번에 동시 처리할 회차 수를 입력하세요.\n` +
+                `1 = 순차 (기본, 가장 안전)\n` +
+                `2~3 = 적당한 가속 (사이트 부하 주의)\n` +
+                `4~8 = 공격적 (차단 위험)\n\n` +
+                `현재 값: ${cur}`,
+                String(cur)
+            );
+            if (input === null) return;
+            const n = parseInt(input, 10);
+            if (!Number.isFinite(n) || n < 1 || n > 8) {
+                alert('1~8 사이 정수를 입력하세요.');
+                return;
+            }
+            if (typeof GM_setValue !== 'undefined') {
+                GM_setValue(CFG_CONCURRENCY, String(n));
+                alert(`✅ 회차 동시 처리 수: ${n}\n페이지 새로고침 후 적용됩니다.`);
+            }
+        });
         GM_registerMenuCommand('🚫 전역 URL 차단 패턴 편집', () => {
             const cur = (typeof GM_getValue !== 'undefined') ? GM_getValue(CFG_GLOBAL_URL_EXCLUDE, '') : '';
             const next = prompt(
@@ -373,7 +408,7 @@ export async function main() {
                     number: tempItem.num
                 });
                 
-                const blob = await zip.generateAsync({ type: "blob" });
+                const blob = await zip.generateAsync({ type: "blob", compression: getCbzCompression() });
                 const filename = `${tempItem.num} - ${title}`;
 
                 await saveFile(blob, filename, 'local', extension, { category: siteInfo.category });

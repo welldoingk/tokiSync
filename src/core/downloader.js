@@ -6,7 +6,7 @@ import { EpubBuilder } from './epub.js';
 import { CbzBuilder } from './cbz.js';
 import { TxtBuilder } from './txt.js';
 import { LogBox, Notifier } from './ui.js';
-import { getConfig, isConfigValid } from './config.js';
+import { getConfig, isConfigValid, getCbzCompression, getConcurrency } from './config.js';
 import { startSilentAudio, stopSilentAudio } from './anti_sleep.js';
 import { fetchHistory, refreshCacheAfterUpload, getBooksByCacheId, initUpdateUploadViaGASRelay, getMergeIndexFragment } from './gas.js';
 import { fetchHistoryDirect, checkSingleHistoryDirect } from './network.js';
@@ -434,6 +434,17 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
         }
 
         // --- Processing Loop ---
+        // [custom] CFG_CONCURRENCY 옵션 — 사용자가 설정한 동시 처리 수.
+        // 기본 1 = 순차. 2 이상 설정해도 현재는 안전을 위해 순차로 동작.
+        // 본격 병렬화는 별도 PR에서 buildingPolicy/masterZip 배치/Fast Path 락 정리 후 도입 예정.
+        const _concurrency = getConcurrency();
+        if (_concurrency > 1) {
+            logger.warn(
+                `⚙️ 동시 처리 ${_concurrency} 설정됨 — 현재 버전은 안전을 위해 순차 처리로 동작합니다. ` +
+                `(masterZip 배치/Fast Path 상호 배제 정리 후 다음 빌드에서 활성화 예정)`,
+                'Downloader:Concurrency'
+            );
+        }
         for (let i = 0; i < list.length; i++) {
             const item = parser.parseListItem(list[i].element || list[i]); 
             console.clear();
@@ -548,7 +559,7 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
                     number: item.num,
                     writer: siteName
                 });
-                const blob = await innerZip.generateAsync({ type: "blob" });
+                const blob = await innerZip.generateAsync({ type: "blob", compression: getCbzCompression() });
 
                 if (buildingPolicy === 'zipOfCbzs') {
                     console.log(`[MasterZip] 추가 중: ${fullFilename}.${extension}`);
@@ -711,7 +722,7 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
                         title: seriesTitle || rootFolder,
                         writer: siteName
                     });
-                    const finalBlob = await finalZip.generateAsync({ type: "blob" });
+                    const finalBlob = await finalZip.generateAsync({ type: "blob", compression: getCbzCompression() });
                     
                     await saveFile(finalBlob, finalFilename, destination, extension, {
                         folderName: rootFolder,

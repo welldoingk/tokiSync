@@ -185,6 +185,10 @@ export async function waitForContent(targetWindow, maxWaitMs = 8000, viewerCfg =
  * @param {object} viewerCfg 동적 파서 뷰어 설정
  */
 export async function scrollToLoad(iframeDoc, stallTimeoutMs = 20000, viewerCfg = {}) {
+    // [custom] viewerCfg.scrollStallTimeoutMs 가 있으면 룰별 timeout 우선 적용
+    if (viewerCfg && Number.isFinite(viewerCfg.scrollStallTimeoutMs) && viewerCfg.scrollStallTimeoutMs >= 1000) {
+        stallTimeoutMs = viewerCfg.scrollStallTimeoutMs;
+    }
     const POLL_INTERVAL = 300;
 
     const win = iframeDoc.defaultView || iframeDoc.parentWindow;

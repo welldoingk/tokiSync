@@ -10,6 +10,38 @@ export const CFG_NOVEL_FORMAT = "TOKI_NOVEL_FORMAT";
 export const CFG_REMOTE_RULE_URL = "TOKI_REMOTE_RULE_URL";
 export const CFG_CUSTOM_RULES = "TOKI_CUSTOM_RULES";
 export const CFG_GLOBAL_URL_EXCLUDE = "TOKI_GLOBAL_URL_EXCLUDE";
+export const CFG_CBZ_COMPRESSION = "TOKI_CBZ_COMPRESSION"; // "DEFLATE" | "STORE"
+export const CFG_CONCURRENCY = "TOKI_CONCURRENCY";         // 1 = sequential (default), 2+ = parallel chapters
+export const CFG_SCROLL_TIMEOUT_MS = "TOKI_SCROLL_TIMEOUT_MS"; // ms, default 20000
+
+/**
+ * [custom] CBZ 압축 모드 — DEFLATE (기본, 작음/느림) 또는 STORE (큼/빠름)
+ */
+export function getCbzCompression() {
+    if (typeof GM_getValue === 'undefined') return 'DEFLATE';
+    const v = (GM_getValue(CFG_CBZ_COMPRESSION, 'DEFLATE') || '').toUpperCase();
+    return v === 'STORE' ? 'STORE' : 'DEFLATE';
+}
+
+/**
+ * [custom] 회차 동시 처리 수 — 1=순차(기본). 2 이상이면 병렬.
+ */
+export function getConcurrency() {
+    if (typeof GM_getValue === 'undefined') return 1;
+    const v = parseInt(GM_getValue(CFG_CONCURRENCY, '1'), 10);
+    if (!Number.isFinite(v) || v < 1) return 1;
+    return Math.min(v, 8); // 최대 8 — 사이트 부하 보호
+}
+
+/**
+ * [custom] 스크롤 대기 timeout (ms) — viewerCfg.scrollStallTimeoutMs 가 우선
+ */
+export function getScrollTimeoutMs() {
+    if (typeof GM_getValue === 'undefined') return 20000;
+    const v = parseInt(GM_getValue(CFG_SCROLL_TIMEOUT_MS, '20000'), 10);
+    if (!Number.isFinite(v) || v < 1000) return 20000;
+    return v;
+}
 
 /**
  * [custom] 전역 URL 차단 패턴 — 모든 룰에 적용
