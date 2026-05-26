@@ -356,7 +356,7 @@ export class Notifier {
         } else {
             // Fallback
             console.log(`[Notification] ${title}: ${text}`);
-            // Do not use alert() as it blocks execution
+            // Do not use tokiAlert() as it blocks execution
         }
     }
 }
@@ -1494,7 +1494,7 @@ export async function showRuleDebugModal() {
             const orig = b.textContent;
             b.textContent = `✅ ${lastKeepUrls.length}개 복사됨`;
             setTimeout(() => b.textContent = orig, 1500);
-        } catch (e) { alert('클립보드 쓰기 실패: ' + e.message); }
+        } catch (e) { tokiAlert('클립보드 쓰기 실패: ' + e.message); }
     };
 
     await analyze();

@@ -6,7 +6,7 @@ const fs = require('fs');
 const METADATA_MAIN = `// ==UserScript==
 // @name         TokiSync (Link to Drive) [LAN Custom]
 // @namespace    local://lan/tokisync-custom
-// @version      1.20.5-custom.11
+// @version      1.20.5-custom.12
 // @description  Toki series sites -> Google Drive syncing tool (Bundled) — LAN custom build (.vw-imgs selector)
 // @author       pray4skylark + local patch
 // @match        *://*/*webtoon/*

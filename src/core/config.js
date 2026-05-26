@@ -1,3 +1,5 @@
+import { tokiAlert } from './ui.js';
+
 export const CFG_URL_KEY = "TOKI_GAS_URL"; // legacy
 export const CFG_ID_KEY = "TOKI_GAS_ID";
 export const CFG_FOLDER_ID = "TOKI_FOLDER_ID";
@@ -263,7 +265,7 @@ export function showConfigModal() {
             }
             validCustomRule = JSON.stringify(parsed, null, 2);
         } catch (e) {
-            alert(`커스텀 룰 JSON 파싱 오류:\n${e.message}\n설정을 저장할 수 없습니다.`);
+            tokiAlert(`커스텀 룰 JSON 파싱 오류:\n${e.message}\n설정을 저장할 수 없습니다.`);
             return;
         }
 
@@ -283,7 +285,7 @@ export function showConfigModal() {
         setConfig(CFG_REMOTE_RULE_URL, newRemoteRule);
         setConfig(CFG_CUSTOM_RULES, validCustomRule);
 
-        alert('설정이 저장되었습니다.');
+        tokiAlert('설정이 저장되었습니다.');
         overlay.remove();
     };
 

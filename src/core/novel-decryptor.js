@@ -4,6 +4,8 @@
  * - 플랜 C (폴백): JWT 토큰 디코딩 + 동적 Nonce 추출 API 직접 복호화 (페이퍼 플랜 대기)
  */
 
+import { tokiAlert } from './ui.js';
+
 let activePopupRef = null;
 
 // =============================================================
@@ -245,7 +247,7 @@ async function fetchMediaViaPopupSingleAttempt(episodeUrl, targetType = 'novel',
             cleanup();
             console.error('[Controller] 팝업 수집 세션 기동 실패:', err);
             closeActivePopup();
-            alert(`[TokiSync 팝업 차단 알림]\n\n브라우저 주소창 우측에서 [팝업 및 리다이렉트 항상 허용]으로 설정해 주셔야 정상 수집이 가능합니다.\n\n허용 후 다시 시도해 주세요.\n(오류: ${err.message})`);
+            tokiAlert(`[TokiSync 팝업 차단 알림]\n\n브라우저 주소창 우측에서 [팝업 및 리다이렉트 항상 허용]으로 설정해 주셔야 정상 수집이 가능합니다.\n\n허용 후 다시 시도해 주세요.\n(오류: ${err.message})`);
             resolve(null);
         }
     });

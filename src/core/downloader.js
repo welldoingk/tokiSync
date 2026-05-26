@@ -5,7 +5,7 @@ import { detectSite } from './detector.js';
 import { EpubBuilder } from './epub.js';
 import { CbzBuilder } from './cbz.js';
 import { TxtBuilder } from './txt.js';
-import { LogBox, Notifier } from './ui.js';
+import { LogBox, Notifier, tokiAlert, tokiConfirm } from './ui.js';
 import { getConfig, isConfigValid, getCbzCompression, getConcurrency } from './config.js';
 import { startSilentAudio, stopSilentAudio } from './anti_sleep.js';
 import { fetchHistory, refreshCacheAfterUpload, getBooksByCacheId, initUpdateUploadViaGASRelay, getMergeIndexFragment } from './gas.js';
@@ -149,14 +149,14 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
     const partialFailures = []; // [v1.8.1] 부분 실패 리스트 (이미지 일부 누락)
     const siteInfo = await detectSite();
     if (!siteInfo) {
-        alert("지원하지 않는 사이트이거나 다운로드 페이지가 아닙니다.");
+        tokiAlert("지원하지 않는 사이트이거나 다운로드 페이지가 아닙니다.");
         stopSilentAudio();
         return;
     }
 
     const parser = await ParserFactory.getParser();
     if (!parser) {
-        alert("파서를 초기화할 수 없습니다.");
+        tokiAlert("파서를 초기화할 수 없습니다.");
         stopSilentAudio();
         return;
     }
@@ -199,7 +199,7 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
 
         // [v1.8.2] Graceful Fallback for missing Drive configuration
         if (destination === 'drive' && !isConfigValid()) {
-            alert('구글 드라이브 설정(Folder ID 등)이 누락되었습니다. 임시로 개별 로컬 다운로드 정책으로 전환합니다.');
+            tokiAlert('구글 드라이브 설정(Folder ID 등)이 누락되었습니다. 임시로 개별 로컬 다운로드 정책으로 전환합니다.');
             logger.warn('⚠️ 구글 드라이브 설정 누락 감지. 정책을 개별 로컬 다운로드로 자동 전환합니다.', 'System');
             buildingPolicy = 'individual';
             destination = 'local';
@@ -255,7 +255,7 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
 
         if (list.length === 0) {
             logger.warn('에피소드 목록이 0개입니다. 사이트 구조가 달라졌거나 올바른 목록 페이지인지 확인하세요.', 'Downloader');
-            alert("다운로드할 항목이 없습니다.");
+            tokiAlert("다운로드할 항목이 없습니다.");
             return;
         }
 
@@ -762,7 +762,7 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
     } catch (error) {
         console.error(error);
         logger.error(`전체 다운로드 루틴 오류 발생: ${error.message}`, 'System');
-        alert(`다운로드 중 오류 발생:\n${error.message}`);
+        tokiAlert(`다운로드 중 오류 발생:\n${error.message}`);
     } finally {
         // Auto-stop Anti-Sleep mode
         stopSilentAudio();
