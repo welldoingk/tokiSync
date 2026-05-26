@@ -34,8 +34,26 @@ PROJECT_HANDOVER_MASTER.md
 # Generated GAS Bundle (CI가 빌드 후 GitHub Pages에 배포)
 google_app_script/TokiSync_Server_Bundle.gs
 
+# Local-only built userscript (배포는 GitHub Pages가 담당)
+tokiSync.user.js
+
+# Backup builds (이전 버전 백업)
+tokiSync.user.js.*
+
+# Local test page snapshots
+sam.html
+sam*.html
+sam_files/
+sam*_files/
+
+# Local rule JSON for LAN distribution
+toonflix-rule.json
+
 # AI Agent Context & Brain (Local only)
 brain/
+
+# OMC (oh-my-claudecode) session state
+.omc/
 
 # Graphify Output (Exclude internal state & cache, keep report & html)
 graphify-out/*
