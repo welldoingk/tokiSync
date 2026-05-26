@@ -1,7 +1,7 @@
 import { tokiDownload, processItem } from './downloader.js';
 import { detectSite, getMaxEpisodes, parseEpisodeRange } from './detector.js'; 
 import { showConfigModal, getConfig, setConfig, isConfigValid, CFG_GLOBAL_URL_EXCLUDE, getGlobalUrlExcludeList, CFG_CBZ_COMPRESSION, CFG_CONCURRENCY, getCbzCompression, getConcurrency } from './config.js';
-import { LogBox, markDownloadedItems, MenuModal, TreeRuleEditor, showRuleDebugModal } from './ui.js';
+import { LogBox, markDownloadedItems, MenuModal, TreeRuleEditor, showRuleDebugModal, tokiAlert, tokiConfirm, tokiPrompt } from './ui.js';
 import { extractEpisodeData } from './extractor.js';
 import { EpubBuilder } from './epub.js';
 import { CbzBuilder } from './cbz.js';
@@ -164,10 +164,10 @@ export async function main() {
         });
         GM_registerMenuCommand('📂 파일명 표준화 (Migration)', runFilenameMigration);
         GM_registerMenuCommand('🔍 룰 디버그 (현재 페이지)', () => showRuleDebugModal());
-        GM_registerMenuCommand(`📦 CBZ 압축 모드 (현재: ${getCbzCompression()})`, () => {
+        GM_registerMenuCommand(`📦 CBZ 압축 모드 (현재: ${getCbzCompression()})`, async () => {
             const cur = getCbzCompression();
             const next = cur === 'STORE' ? 'DEFLATE' : 'STORE';
-            const ok = confirm(
+            const ok = await tokiConfirm(
                 `CBZ 압축 모드를 ${cur} → ${next} 로 변경합니다.\n\n` +
                 `• DEFLATE: 파일 작음, 느림 (기본)\n` +
                 `• STORE:   파일 큼, ZIP 빌드 30~50% 빠름\n\n` +
@@ -175,42 +175,42 @@ export async function main() {
             );
             if (ok && typeof GM_setValue !== 'undefined') {
                 GM_setValue(CFG_CBZ_COMPRESSION, next);
-                alert(`✅ CBZ 압축 모드: ${next}\n페이지 새로고침 후 적용됩니다.`);
+                await tokiAlert(`✅ CBZ 압축 모드: ${next}\n페이지 새로고침 후 적용됩니다.`);
             }
         });
-        GM_registerMenuCommand(`⚡ 회차 동시 처리 수 (현재: ${getConcurrency()})`, () => {
+        GM_registerMenuCommand(`⚡ 회차 동시 처리 수 (현재: ${getConcurrency()})`, async () => {
             const cur = getConcurrency();
-            const input = prompt(
+            const input = await tokiPrompt(
                 `한 번에 동시 처리할 회차 수를 입력하세요.\n` +
                 `1 = 순차 (기본, 가장 안전)\n` +
                 `2~3 = 적당한 가속 (사이트 부하 주의)\n` +
-                `4~8 = 공격적 (차단 위험)\n\n` +
-                `현재 값: ${cur}`,
+                `4~8 = 공격적 (차단 위험)`,
                 String(cur)
             );
             if (input === null) return;
             const n = parseInt(input, 10);
             if (!Number.isFinite(n) || n < 1 || n > 8) {
-                alert('1~8 사이 정수를 입력하세요.');
+                await tokiAlert('1~8 사이 정수를 입력하세요.');
                 return;
             }
             if (typeof GM_setValue !== 'undefined') {
                 GM_setValue(CFG_CONCURRENCY, String(n));
-                alert(`✅ 회차 동시 처리 수: ${n}\n페이지 새로고침 후 적용됩니다.`);
+                await tokiAlert(`✅ 회차 동시 처리 수: ${n}\n페이지 새로고침 후 적용됩니다.`);
             }
         });
-        GM_registerMenuCommand('🚫 전역 URL 차단 패턴 편집', () => {
+        GM_registerMenuCommand('🚫 전역 URL 차단 패턴 편집', async () => {
             const cur = (typeof GM_getValue !== 'undefined') ? GM_getValue(CFG_GLOBAL_URL_EXCLUDE, '') : '';
-            const next = prompt(
+            const next = await tokiPrompt(
                 '모든 룰에 자동 적용될 URL 차단 패턴 (쉼표 또는 줄바꿈 구분).\n' +
                 '예: /board_uploads/, /ads/, i.toonflix.app/board\n\n' +
                 '/regex/ 형식도 지원합니다.',
-                cur
+                cur,
+                { multiline: true }
             );
             if (next !== null && typeof GM_setValue !== 'undefined') {
                 GM_setValue(CFG_GLOBAL_URL_EXCLUDE, next);
                 const list = next.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
-                alert(`✅ 전역 URL 차단 패턴 ${list.length}개 저장됨:\n` + list.join('\n') + '\n\n페이지 새로고침 후 적용됩니다.');
+                await tokiAlert(`✅ 전역 URL 차단 패턴 ${list.length}개 저장됨:\n` + list.join('\n') + '\n\n페이지 새로고침 후 적용됩니다.');
             }
         });
     }

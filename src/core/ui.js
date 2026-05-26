@@ -11,6 +11,91 @@ import { GenericParser } from './parsers/GenericParser.js';
 import { extractEpisodeData } from './extractor.js';
 import styles from './ui.css';
 
+// ===== [custom] 비-블로킹 모달 다이얼로그 (native confirm/alert/prompt 대체) =====
+// native dialog는 페이지 렌더러를 동기적으로 멈춰 CDP 자동화/모달 UX 충돌을 일으킴.
+// 모두 Promise 반환 — async 호출처에서 await 사용.
+
+function _tokiModalShell(bodyHtml, opts = {}) {
+    return new Promise(resolve => {
+        const ov = document.createElement('div');
+        ov.className = 'toki-modal-dialog';
+        ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:2147483647;display:flex;align-items:center;justify-content:center;font:14px/1.5 system-ui,sans-serif';
+        ov.innerHTML = `<div style="background:#fff;color:#222;padding:18px 22px;border-radius:8px;min-width:320px;max-width:560px;box-shadow:0 8px 40px #0006">${bodyHtml}</div>`;
+        document.body.appendChild(ov);
+        const cleanup = (val) => { window.removeEventListener('keydown', kh); ov.remove(); resolve(val); };
+        const kh = (e) => { if (e.key === 'Escape') cleanup(opts.escValue !== undefined ? opts.escValue : null); };
+        window.addEventListener('keydown', kh);
+        opts.bind && opts.bind(ov, cleanup);
+        if (opts.dismissOnBackdrop !== false) {
+            ov.addEventListener('click', e => { if (e.target === ov) cleanup(opts.escValue !== undefined ? opts.escValue : null); });
+        }
+    });
+}
+
+export function tokiAlert(message) {
+    const html = `
+        <div style="white-space:pre-wrap;margin-bottom:14px">${String(message).replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>
+        <div style="text-align:right">
+            <button data-act="ok" style="padding:6px 14px;background:#1a73e8;color:#fff;border:1px solid #1a73e8;border-radius:4px;cursor:pointer;font-weight:600">확인</button>
+        </div>`;
+    return _tokiModalShell(html, {
+        escValue: undefined,
+        bind: (ov, cleanup) => {
+            const b = ov.querySelector('[data-act="ok"]');
+            b.focus();
+            b.onclick = () => cleanup(undefined);
+        }
+    });
+}
+
+export function tokiConfirm(message, opts = {}) {
+    const okText = opts.okText || '확인';
+    const cancelText = opts.cancelText || '취소';
+    const html = `
+        <div style="white-space:pre-wrap;margin-bottom:14px">${String(message).replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>
+        <div style="text-align:right;display:flex;gap:8px;justify-content:flex-end">
+            <button data-act="cancel" style="padding:6px 14px;background:#fff;color:#333;border:1px solid #ccc;border-radius:4px;cursor:pointer">${cancelText}</button>
+            <button data-act="ok" style="padding:6px 14px;background:${opts.danger ? '#ea4335' : '#1a73e8'};color:#fff;border:1px solid ${opts.danger ? '#ea4335' : '#1a73e8'};border-radius:4px;cursor:pointer;font-weight:600">${okText}</button>
+        </div>`;
+    return _tokiModalShell(html, {
+        escValue: false,
+        bind: (ov, cleanup) => {
+            const ok = ov.querySelector('[data-act="ok"]');
+            ok.focus();
+            ok.onclick = () => cleanup(true);
+            ov.querySelector('[data-act="cancel"]').onclick = () => cleanup(false);
+        }
+    });
+}
+
+export function tokiPrompt(message, defaultValue = '', opts = {}) {
+    const multiline = !!opts.multiline;
+    const inputHtml = multiline
+        ? `<textarea data-input style="width:100%;box-sizing:border-box;padding:6px;font:13px/1.4 ui-monospace,monospace;min-height:100px">${String(defaultValue).replace(/&/g,'&amp;').replace(/</g,'&lt;')}</textarea>`
+        : `<input data-input type="text" value="${String(defaultValue).replace(/"/g,'&quot;')}" style="width:100%;box-sizing:border-box;padding:6px;font:13px/1.4 ui-monospace,monospace" />`;
+    const html = `
+        <div style="white-space:pre-wrap;margin-bottom:10px">${String(message).replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>
+        ${inputHtml}
+        <div style="text-align:right;margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
+            <button data-act="cancel" style="padding:6px 14px;background:#fff;color:#333;border:1px solid #ccc;border-radius:4px;cursor:pointer">취소</button>
+            <button data-act="ok" style="padding:6px 14px;background:#1a73e8;color:#fff;border:1px solid #1a73e8;border-radius:4px;cursor:pointer;font-weight:600">확인</button>
+        </div>`;
+    return _tokiModalShell(html, {
+        escValue: null,
+        bind: (ov, cleanup) => {
+            const inp = ov.querySelector('[data-input]');
+            inp.focus();
+            if (!multiline) inp.select();
+            const ok = () => cleanup(inp.value);
+            ov.querySelector('[data-act="ok"]').onclick = ok;
+            ov.querySelector('[data-act="cancel"]').onclick = () => cleanup(null);
+            if (!multiline) {
+                inp.addEventListener('keydown', e => { if (e.key === 'Enter') ok(); });
+            }
+        }
+    });
+}
+
 export class LogBox {
     static instance = null;
 
@@ -944,8 +1029,8 @@ export class TreeRuleEditor {
         this.updateJsonPreview();
     }
 
-    removeNode(path) {
-        if (!confirm(`노드(${path})를 삭제하시겠습니까?`)) return;
+    async removeNode(path) {
+        if (!(await tokiConfirm(`노드(${path})를 삭제하시겠습니까?`, { danger: true, okText: '삭제' }))) return;
         
         const parts = path.split('.');
         if (parts.length === 1) { // Root rule
@@ -1006,9 +1091,9 @@ export class TreeRuleEditor {
             }
         };
 
-        overlay.querySelector('#tree-btn-save').onclick = () => {
+        overlay.querySelector('#tree-btn-save').onclick = async () => {
             RuleManager.saveCustomRules(this.rules);
-            alert('파싱 규칙이 성공적으로 저장되었습니다.');
+            await tokiAlert('파싱 규칙이 성공적으로 저장되었습니다.');
             overlay.remove();
         };
 
@@ -1057,14 +1142,17 @@ export class TreeRuleEditor {
 
             selectOverlay.querySelector('#import-select-close').onclick = () => selectOverlay.remove();
 
-            const handleRulesImport = (rules) => {
+            const handleRulesImport = async (rules) => {
                 const rulesArr = Array.isArray(rules) ? rules : (rules.rules || []);
                 if (!Array.isArray(rulesArr) || rulesArr.length === 0) {
-                    alert('가져올 규칙이 유효하지 않거나 비어 있습니다.');
+                    await tokiAlert('가져올 규칙이 유효하지 않거나 비어 있습니다.');
                     return;
                 }
-                const mode = confirm('기존 규칙과 합치시겠습니까? (취소 시 전체 덮어쓰기)') ? 'merge' : 'overwrite';
-                if (mode === 'overwrite') {
+                const merge = await tokiConfirm(
+                    '기존 규칙과 합치시겠습니까?\n(취소 = 전체 덮어쓰기)',
+                    { okText: '합치기', cancelText: '덮어쓰기' }
+                );
+                if (!merge) {
                     this.rules = rulesArr;
                 } else {
                     RuleManager.bulkImport(rulesArr, 'merge');
@@ -1083,12 +1171,12 @@ export class TreeRuleEditor {
                     const file = e.target.files[0];
                     if (!file) return;
                     const reader = new FileReader();
-                    reader.onload = (ev) => {
+                    reader.onload = async (ev) => {
                         try {
                             const imported = JSON.parse(ev.target.result);
-                            handleRulesImport(imported);
+                            await handleRulesImport(imported);
                         } catch (err) {
-                            alert('JSON 파싱 오류: ' + err.message);
+                            await tokiAlert('JSON 파싱 오류: ' + err.message);
                         }
                     };
                     reader.readAsText(file);
@@ -1106,22 +1194,22 @@ export class TreeRuleEditor {
             selectOverlay.querySelector('#import-btn-fetch').onclick = async () => {
                 const url = selectOverlay.querySelector('#import-url-input').value.trim();
                 if (!url) {
-                    alert('URL을 입력해주세요.');
+                    await tokiAlert('URL을 입력해주세요.');
                     return;
                 }
                 const fetchBtn = selectOverlay.querySelector('#import-btn-fetch');
                 fetchBtn.disabled = true;
                 fetchBtn.innerHTML = '<span>⏳ 가져오는 중...</span>';
-                
+
                 try {
                     const fetched = await RuleManager.fetchRemoteRules(url);
                     if (fetched) {
-                        handleRulesImport(fetched);
+                        await handleRulesImport(fetched);
                     } else {
-                        alert('원격 규칙을 가져오는데 실패했습니다. URL 주소 및 네트워크 상태를 확인하세요.');
+                        await tokiAlert('원격 규칙을 가져오는데 실패했습니다. URL 주소 및 네트워크 상태를 확인하세요.');
                     }
                 } catch (err) {
-                    alert('오류 발생: ' + err.message);
+                    await tokiAlert('오류 발생: ' + err.message);
                 } finally {
                     fetchBtn.disabled = false;
                     fetchBtn.innerHTML = '<span>가져오기 실행</span>';
