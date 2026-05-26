@@ -278,16 +278,53 @@ import { scrollToLoad, fetchBlobWithXHR, blobToArrayBuffer, waitForContent, slee
 
                         // 이미지 URL 목록을 추출하는 헬퍼 정의 (하이브리드 파싱)
                         const extractImageUrls = () => {
-                            let imageSelector = '.view-padding img, .viewer-main img, #v_content img, .img-tag';
+                            let imageSelector = '.view-padding img, .viewer-main img, #v_content img, .img-tag, .vw-imgs img';
                             if (viewerCfg.imageContainer) {
                                 const itemSel = viewerCfg.imageItem || 'img';
                                 imageSelector = viewerCfg.imageContainer.split(',').map(c => `${c.trim()} ${itemSel}`).join(', ');
                             }
 
-                            const urls = Array.from(document.querySelectorAll(imageSelector))
+                            // [v1.9.5 parity] viewer.exclude / viewer.remove — 광고/잡음 컨테이너 안의 img 제외
+                            const excludeRule = viewerCfg.exclude || viewerCfg.remove;
+                            const excludeSelectors = excludeRule
+                                ? (Array.isArray(excludeRule) ? excludeRule : [excludeRule])
+                                : [];
+                            const matchesExclude = (img) => excludeSelectors.some(sel => {
+                                try { return !!img.closest(sel); } catch (e) { return false; }
+                            });
+
+                            // [custom] viewer.urlExclude — URL substring/regex 차단 (광고 CDN 경로 등)
+                            const urlExcludeRaw = viewerCfg.urlExclude || viewerCfg.urlBlocklist;
+                            const urlExcludeList = urlExcludeRaw
+                                ? (Array.isArray(urlExcludeRaw) ? urlExcludeRaw : [urlExcludeRaw])
+                                : [];
+                            const isUrlBlocked = (url) => {
+                                if (!url) return false;
+                                return urlExcludeList.some(p => {
+                                    if (typeof p !== 'string') return false;
+                                    if (p.length > 2 && p.startsWith('/') && p.endsWith('/')) {
+                                        try { return new RegExp(p.slice(1, -1)).test(url); } catch (e) { return false; }
+                                    }
+                                    return url.includes(p);
+                                });
+                            };
+
+                            const all = Array.from(document.querySelectorAll(imageSelector));
+                            const kept = excludeSelectors.length ? all.filter(img => !matchesExclude(img)) : all;
+                            const droppedCount = all.length - kept.length;
+                            if (droppedCount > 0) {
+                                console.log(`🚫 [TokiSync-Worker] exclude 룰로 ${droppedCount}개 광고/잡음 이미지 제외`);
+                            }
+
+                            const rawUrls = kept
                                 .map(img => img.src || img.dataset.src || img.dataset.original)
                                 .filter(src => src && !src.includes('blank.gif') && !src.includes('loading.gif'))
                                 .map(src => src.trim());
+                            const urls = urlExcludeList.length ? rawUrls.filter(u => !isUrlBlocked(u)) : rawUrls;
+                            const urlDropped = rawUrls.length - urls.length;
+                            if (urlDropped > 0) {
+                                console.log(`🚫 [TokiSync-Worker] urlExclude 룰로 ${urlDropped}개 URL 차단`);
+                            }
                             return urls;
                         };
 

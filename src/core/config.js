@@ -9,6 +9,18 @@ export const CFG_NOVEL_MODE = "TOKI_NOVEL_MODE";
 export const CFG_NOVEL_FORMAT = "TOKI_NOVEL_FORMAT";
 export const CFG_REMOTE_RULE_URL = "TOKI_REMOTE_RULE_URL";
 export const CFG_CUSTOM_RULES = "TOKI_CUSTOM_RULES";
+export const CFG_GLOBAL_URL_EXCLUDE = "TOKI_GLOBAL_URL_EXCLUDE";
+
+/**
+ * [custom] 전역 URL 차단 패턴 — 모든 룰에 적용
+ * 쉼표 또는 줄바꿈으로 구분된 substring/regex 패턴
+ */
+export function getGlobalUrlExcludeList() {
+    if (typeof GM_getValue === 'undefined') return [];
+    const raw = GM_getValue(CFG_GLOBAL_URL_EXCLUDE, "");
+    if (!raw || !raw.trim()) return [];
+    return raw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+}
 
 /**
  * Get current configuration

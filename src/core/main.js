@@ -1,7 +1,7 @@
 import { tokiDownload, processItem } from './downloader.js';
 import { detectSite, getMaxEpisodes, parseEpisodeRange } from './detector.js'; 
-import { showConfigModal, getConfig, setConfig, isConfigValid } from './config.js';
-import { LogBox, markDownloadedItems, MenuModal, TreeRuleEditor } from './ui.js';
+import { showConfigModal, getConfig, setConfig, isConfigValid, CFG_GLOBAL_URL_EXCLUDE, getGlobalUrlExcludeList } from './config.js';
+import { LogBox, markDownloadedItems, MenuModal, TreeRuleEditor, showRuleDebugModal } from './ui.js';
 import { extractEpisodeData } from './extractor.js';
 import { EpubBuilder } from './epub.js';
 import { CbzBuilder } from './cbz.js';
@@ -163,6 +163,21 @@ export async function main() {
             tokiDownload(undefined, config.policy);
         });
         GM_registerMenuCommand('📂 파일명 표준화 (Migration)', runFilenameMigration);
+        GM_registerMenuCommand('🔍 룰 디버그 (현재 페이지)', () => showRuleDebugModal());
+        GM_registerMenuCommand('🚫 전역 URL 차단 패턴 편집', () => {
+            const cur = (typeof GM_getValue !== 'undefined') ? GM_getValue(CFG_GLOBAL_URL_EXCLUDE, '') : '';
+            const next = prompt(
+                '모든 룰에 자동 적용될 URL 차단 패턴 (쉼표 또는 줄바꿈 구분).\n' +
+                '예: /board_uploads/, /ads/, i.toonflix.app/board\n\n' +
+                '/regex/ 형식도 지원합니다.',
+                cur
+            );
+            if (next !== null && typeof GM_setValue !== 'undefined') {
+                GM_setValue(CFG_GLOBAL_URL_EXCLUDE, next);
+                const list = next.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+                alert(`✅ 전역 URL 차단 패턴 ${list.length}개 저장됨:\n` + list.join('\n') + '\n\n페이지 새로고침 후 적용됩니다.');
+            }
+        });
     }
 
     // -- 2. Pre-detection & Core States --

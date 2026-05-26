@@ -1,5 +1,6 @@
 import { GenericParser } from './GenericParser.js';
 import { detectSite } from '../detector.js';
+import { getGlobalUrlExcludeList } from '../config.js';
 
 /**
  * ParserFactory
@@ -26,10 +27,30 @@ export class ParserFactory {
 
         // Dynamic Generic Parser
         if (site === 'generic' && matchedRule) {
-            this.#instance = new GenericParser(protocolDomain, matchedRule);
+            // [custom] 전역 URL 차단 패턴을 룰에 자동 주입 (룰 수정 불가능한 원격 룰 보완용)
+            const ruleWithGlobal = ParserFactory._injectGlobalUrlExclude(matchedRule);
+            this.#instance = new GenericParser(protocolDomain, ruleWithGlobal);
             return this.#instance;
         }
 
         return null;
+    }
+
+    static _injectGlobalUrlExclude(rule) {
+        // 빌트인 광고 CDN 차단 패턴 (LAN custom build에 항상 포함)
+        const BUILTIN_URL_EXCLUDE = [
+            '/board_uploads/',
+        ];
+        const globals = [...BUILTIN_URL_EXCLUDE, ...getGlobalUrlExcludeList()];
+        if (!globals.length) return rule;
+        const cloned = JSON.parse(JSON.stringify(rule));
+        cloned.viewer = cloned.viewer || {};
+        const existing = cloned.viewer.urlExclude || cloned.viewer.urlBlocklist;
+        const existingList = existing
+            ? (Array.isArray(existing) ? existing : [existing])
+            : [];
+        cloned.viewer.urlExclude = Array.from(new Set([...existingList, ...globals]));
+        console.log(`[ParserFactory] URL 차단 패턴 주입 (빌트인 ${BUILTIN_URL_EXCLUDE.length} + 사용자 ${globals.length - BUILTIN_URL_EXCLUDE.length}):`, cloned.viewer.urlExclude);
+        return cloned;
     }
 }

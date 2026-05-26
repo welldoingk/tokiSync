@@ -253,6 +253,22 @@ export class GenericParser extends BaseParser {
 
         const imgs = Array.from(container.querySelectorAll(viewerCfg.imageItem || 'img'));
 
+        // [custom] URL 차단 패턴 (substring 또는 /regex/) — 광고 CDN 경로 등 차단
+        const urlExcludeRaw = viewerCfg.urlExclude || viewerCfg.urlBlocklist;
+        const urlExcludeList = urlExcludeRaw
+            ? (Array.isArray(urlExcludeRaw) ? urlExcludeRaw : [urlExcludeRaw])
+            : [];
+        const isUrlBlocked = (url) => {
+            if (!url) return false;
+            return urlExcludeList.some(p => {
+                if (typeof p !== 'string') return false;
+                if (p.length > 2 && p.startsWith('/') && p.endsWith('/')) {
+                    try { return new RegExp(p.slice(1, -1)).test(url); } catch (e) { return false; }
+                }
+                return url.includes(p);
+            });
+        };
+
         return imgs.map(img => {
             let foundUrl = null;
             // [v1.8.1] 동적 키가 발견되면 최우선 순위로 설정하여 탐지 성공률 극대화
@@ -273,9 +289,10 @@ export class GenericParser extends BaseParser {
             }
 
             const finalUrl = foundUrl || this.getAbsoluteUrl(img.src) || "";
+            const blocked = isUrlBlocked(finalUrl);
             return {
                 url: finalUrl,
-                isDummy: this.isDummyUrl(finalUrl)
+                isDummy: this.isDummyUrl(finalUrl) || blocked
             };
         });
     }

@@ -4,13 +4,11 @@ const fs = require('fs');
 
 // Metadata Block
 const METADATA_MAIN = `// ==UserScript==
-// @name         TokiSync (Link to Drive)
-// @namespace    http://tampermonkey.net/
-// @version      1.20.5
-// @description  Toki series sites -> Google Drive syncing tool (Bundled)
-// @author       pray4skylark
-// @updateURL    https://pray4skylark.github.io/tokiSync/tokiSync.user.js
-// @downloadURL  https://pray4skylark.github.io/tokiSync/tokiSync.user.js
+// @name         TokiSync (Link to Drive) [LAN Custom]
+// @namespace    local://lan/tokisync-custom
+// @version      1.20.5-custom.8
+// @description  Toki series sites -> Google Drive syncing tool (Bundled) — LAN custom build (.vw-imgs selector)
+// @author       pray4skylark + local patch
 // @match        *://*/*webtoon/*
 // @match        *://*/*novel/*
 // @match        *://*/*manhwa/*

@@ -1152,3 +1152,262 @@ export class TreeRuleEditor {
         };
     }
 }
+
+/**
+ * showRuleDebugModal — 현재 페이지에 활성 룰을 적용해 다운로드 대상 이미지를 시각화
+ * GenericParser/워커와 동일한 알고리즘: imageContainer → imageItem → exclude(closest) → dummy 필터
+ */
+export async function showRuleDebugModal() {
+    document.querySelectorAll('.toki-rule-debug-overlay').forEach(el => el.remove());
+
+    const overlay = document.createElement('div');
+    overlay.className = 'toki-rule-debug-overlay';
+    overlay.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:2147483646;pointer-events:none;font:13px/1.5 system-ui,sans-serif;`;
+    const initLeft = Math.max(20, (window.innerWidth - Math.min(1100, window.innerWidth * 0.92)) / 2);
+    const initTop = Math.max(20, (window.innerHeight - window.innerHeight * 0.88) / 2);
+    overlay.innerHTML = `
+        <div data-panel style="position:absolute;left:${initLeft}px;top:${initTop}px;background:#fff;color:#222;max-width:1100px;width:92vw;max-height:88vh;border-radius:8px;box-shadow:0 8px 40px #0006;display:flex;flex-direction:column;overflow:hidden;pointer-events:auto;resize:both">
+            <div data-drag style="padding:10px 14px;border-bottom:1px solid #ddd;display:flex;align-items:center;justify-content:space-between;cursor:move;user-select:none;background:#f5f5f5">
+                <strong>🔍 룰 디버그 — 현재 페이지 파싱 미리보기 <small style="color:#888;font-weight:normal">(헤더 드래그로 이동)</small></strong>
+                <button data-act="close" style="border:none;background:transparent;font-size:20px;cursor:pointer">✕</button>
+            </div>
+            <div id="rd-stats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:10px 14px;background:#fafafa"></div>
+            <pre id="rd-log" style="margin:0;padding:8px 14px;background:#f3f3f3;font:11px/1.4 ui-monospace,monospace;max-height:160px;overflow:auto;white-space:pre-wrap"></pre>
+            <div style="flex:1;overflow:auto">
+                <table id="rd-tbl" style="width:100%;border-collapse:collapse;font-size:12px">
+                    <thead style="position:sticky;top:0;background:#eee">
+                        <tr><th style="padding:4px 8px;text-align:left">#</th><th style="padding:4px 8px;text-align:left">상태</th><th style="padding:4px 8px;text-align:left">closest 경로</th><th style="padding:4px 8px;text-align:left">URL</th><th style="padding:4px 8px;text-align:left">미리보기</th></tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div style="padding:8px 14px;border-top:1px solid #ddd;display:flex;gap:8px;align-items:center;background:#fafafa">
+                <button data-act="rerun" style="padding:5px 12px;cursor:pointer">▶ 다시 분석</button>
+                <button data-act="copy-urls" style="padding:5px 12px;cursor:pointer">📋 KEEP URL 복사</button>
+                <span style="margin-left:auto;color:#666">ESC 또는 ✕ 로 닫기</span>
+            </div>
+        </div>`;
+    document.body.appendChild(overlay);
+
+    const $ = sel => overlay.querySelector(sel);
+    const log = (msg) => { $('#rd-log').textContent += msg + '\n'; };
+    const clearLog = () => { $('#rd-log').textContent = ''; };
+
+    const close = () => { overlay.remove(); window.removeEventListener('keydown', escHandler); };
+    overlay.querySelector('[data-act="close"]').onclick = close;
+    const escHandler = e => { if (e.key === 'Escape') close(); };
+    window.addEventListener('keydown', escHandler);
+
+    // 드래그 이동 — 헤더(data-drag)를 잡아 이동
+    const panel = overlay.querySelector('[data-panel]');
+    const dragHandle = overlay.querySelector('[data-drag]');
+    let dragState = null;
+    const onMove = (e) => {
+        if (!dragState) return;
+        const x = (e.touches ? e.touches[0].clientX : e.clientX) - dragState.dx;
+        const y = (e.touches ? e.touches[0].clientY : e.clientY) - dragState.dy;
+        const maxX = window.innerWidth - 50;
+        const maxY = window.innerHeight - 30;
+        panel.style.left = Math.min(Math.max(-panel.offsetWidth + 80, x), maxX) + 'px';
+        panel.style.top = Math.min(Math.max(0, y), maxY) + 'px';
+    };
+    const onUp = () => {
+        dragState = null;
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.removeEventListener('touchmove', onMove);
+        document.removeEventListener('touchend', onUp);
+    };
+    dragHandle.addEventListener('mousedown', (e) => {
+        if (e.target.closest('[data-act]')) return;
+        const rect = panel.getBoundingClientRect();
+        dragState = { dx: e.clientX - rect.left, dy: e.clientY - rect.top };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+        e.preventDefault();
+    });
+    dragHandle.addEventListener('touchstart', (e) => {
+        if (e.target.closest('[data-act]')) return;
+        const rect = panel.getBoundingClientRect();
+        const t = e.touches[0];
+        dragState = { dx: t.clientX - rect.left, dy: t.clientY - rect.top };
+        document.addEventListener('touchmove', onMove, { passive: false });
+        document.addEventListener('touchend', onUp);
+    }, { passive: true });
+
+    const isDummyUrl = (url) => {
+        if (!url) return true;
+        if (url.startsWith('data:image')) return true;
+        const l = url.toLowerCase();
+        const dummies = ['blank.gif','loading.gif','loading-image.gif','pixel.gif','spacer.gif','transparent.gif','1x1.gif','dot.gif'];
+        if (dummies.some(p => l.includes(p))) return true;
+        if (/\/img\/(loading|placeholder)/.test(l)) return true;
+        return false;
+    };
+    const selectorOf = (el) => {
+        const parts = [];
+        let n = el;
+        for (let i = 0; i < 3 && n && n.tagName; i++) {
+            let s = n.tagName.toLowerCase();
+            if (n.id) s += '#' + n.id;
+            if (n.className && typeof n.className === 'string') {
+                const cls = n.className.trim().split(/\s+/).slice(0, 2).filter(Boolean).map(c => '.' + c).join('');
+                s += cls;
+            }
+            parts.unshift(s);
+            n = n.parentElement;
+        }
+        return parts.join(' > ');
+    };
+
+    let lastKeepUrls = [];
+
+    async function analyze() {
+        clearLog();
+        const tbody = $('#rd-tbl tbody');
+        tbody.innerHTML = '';
+
+        log(`[page] ${location.href}`);
+
+        // 등록된 모든 룰 후보 dump — 어느 룰이 우선되는지 시각화
+        try {
+            const allRules = await RuleManager.getRules();
+            log(`[rules] 등록된 룰 ${allRules.length}개 (위에서부터 우선):`);
+            allRules.slice(0, 10).forEach((r, i) => {
+                const matched = (() => {
+                    if (!r.urlPattern) return '⚪ SKIP(빈 urlPattern)';
+                    try { return new RegExp(r.urlPattern, 'i').test(location.href) ? '✅ MATCH' : '❌ no-match'; }
+                    catch (e) { return '⚠️ invalid regex'; }
+                })();
+                log(`   ${i+1}. ${matched}  name="${r.name || r.id}"  urlPattern="${r.urlPattern || ''}"`);
+            });
+            if (allRules.length > 10) log(`   ... +${allRules.length - 10}개 더`);
+        } catch (e) { log('[rules] 룰 목록 조회 실패: ' + e.message); }
+
+        const parser = await ParserFactory.getParser();
+        if (!parser) {
+            log('[parser] ❌ 활성 룰 없음 — 메뉴에서 사이트 룰을 먼저 등록하세요');
+            $('#rd-stats').innerHTML = '<div style="grid-column:1/-1;padding:8px;background:#fbe9e7;color:#b71c1c">활성 파서가 없습니다.</div>';
+            return;
+        }
+        const rule = parser.rule || {};
+        const viewerCfg = rule.viewer || {};
+        log(`[rule] 🎯 실제 매칭: name="${rule.name || rule.id || '(이름 없음)'}"  urlPattern="${rule.urlPattern || '-'}"`);
+        log(`[rule] 전체 JSON:`);
+        log(JSON.stringify(rule, null, 2));
+        log(`[viewer] imageContainer="${viewerCfg.imageContainer || ''}"  imageItem="${viewerCfg.imageItem || 'img'}"`);
+
+        const totalImgs = document.querySelectorAll('img').length;
+        log(`[doc] 문서 전체 <img>: ${totalImgs}개`);
+
+        let container = document;
+        if (viewerCfg.imageContainer) {
+            container = document.querySelector(viewerCfg.imageContainer);
+            if (!container) {
+                log(`[container] ❌ '${viewerCfg.imageContainer}' DOM에서 못 찾음`);
+                render([], totalImgs, 0, 0);
+                return;
+            }
+            log(`[container] ✅ '${viewerCfg.imageContainer}' 발견`);
+        } else {
+            log(`[container] (지정 없음) — 문서 전체`);
+        }
+
+        const itemSel = viewerCfg.imageItem || 'img';
+        const matched = Array.from(container.querySelectorAll(itemSel));
+        log(`[match] '${itemSel}' → ${matched.length}개`);
+
+        const excludeRule = viewerCfg.exclude || viewerCfg.remove;
+        const excludeSelectors = excludeRule
+            ? (Array.isArray(excludeRule) ? excludeRule : [excludeRule])
+            : [];
+        if (excludeSelectors.length) log(`[exclude] ${excludeSelectors.join(' , ')}`);
+
+        const urlExcludeRaw = viewerCfg.urlExclude || viewerCfg.urlBlocklist;
+        const urlExcludeList = urlExcludeRaw
+            ? (Array.isArray(urlExcludeRaw) ? urlExcludeRaw : [urlExcludeRaw])
+            : [];
+        if (urlExcludeList.length) log(`[urlExclude] ${urlExcludeList.join(' , ')}`);
+        const urlBlockedBy = (url) => {
+            if (!url) return null;
+            return urlExcludeList.find(p => {
+                if (typeof p !== 'string') return false;
+                if (p.length > 2 && p.startsWith('/') && p.endsWith('/')) {
+                    try { return new RegExp(p.slice(1, -1)).test(url); } catch (e) { return false; }
+                }
+                return url.includes(p);
+            });
+        };
+
+        const lazyAttrs = viewerCfg.lazyAttrOptions || ['data-src', 'data-lazy', 'src'];
+        const rows = matched.map(img => {
+            const droppedBy = excludeSelectors.find(sel => { try { return !!img.closest(sel); } catch (e) { return false; } });
+            let url = '';
+            for (const a of lazyAttrs) { const v = img.getAttribute(a); if (v) { url = v; break; } }
+            if (!url) url = img.getAttribute('src') || '';
+            const dummy = isDummyUrl(url);
+            const urlBlock = urlBlockedBy(url);
+            let status = 'keep';
+            if (droppedBy) status = 'drop:exclude';
+            else if (!url) status = 'drop:no-url';
+            else if (urlBlock) status = 'drop:url-block';
+            else if (dummy) status = 'drop:dummy';
+            return { img, url, status, droppedBy: droppedBy || urlBlock };
+        });
+
+        const keep = rows.filter(r => r.status === 'keep');
+        const dropEx = rows.filter(r => r.status === 'drop:exclude').length;
+        const dropUrl = rows.filter(r => r.status === 'drop:url-block').length;
+        const dropDum = rows.filter(r => r.status === 'drop:dummy').length;
+        const dropEmpty = rows.filter(r => r.status === 'drop:no-url').length;
+        log(`[result] keep=${keep.length}  drop_exclude=${dropEx}  drop_url=${dropUrl}  drop_dummy=${dropDum}  drop_no_url=${dropEmpty}`);
+
+        lastKeepUrls = keep.map(r => r.url);
+        render(rows, totalImgs, matched.length, keep.length);
+    }
+
+    function render(rows, totalImgs, matchedCount, keepCount) {
+        const cell = (val, label, bg) => `<div style="padding:8px;background:${bg};border-radius:4px"><b style="font-size:18px;display:block">${val}</b>${label}</div>`;
+        $('#rd-stats').innerHTML =
+            cell(totalImgs, '문서 전체 img', '#eef') +
+            cell(matchedCount, 'selector 매치', '#eef') +
+            cell(matchedCount - keepCount, '제외 (exclude/dummy)', '#fdecea') +
+            cell(keepCount, '최종 다운로드', '#e6f4ea');
+
+        const tbody = $('#rd-tbl tbody');
+        rows.forEach((r, i) => {
+            const tr = document.createElement('tr');
+            tr.style.borderBottom = '1px solid #eee';
+            const badge = r.status === 'keep'
+                ? '<span style="background:#34a85333;color:#1e7e34;padding:1px 6px;border-radius:10px;font-weight:600;font-size:11px">KEEP</span>'
+                : r.status === 'drop:exclude'
+                    ? `<span style="background:#ea443533;color:#b71c1c;padding:1px 6px;border-radius:10px;font-weight:600;font-size:11px">EXCLUDE</span><br><small style="color:#888">${r.droppedBy}</small>`
+                    : r.status === 'drop:url-block'
+                        ? `<span style="background:#9c27b033;color:#6a1b9a;padding:1px 6px;border-radius:10px;font-weight:600;font-size:11px">URL-BLOCK</span><br><small style="color:#888">${r.droppedBy}</small>`
+                        : r.status === 'drop:dummy'
+                            ? '<span style="background:#fbbc0433;color:#856404;padding:1px 6px;border-radius:10px;font-weight:600;font-size:11px">DUMMY</span>'
+                            : '<span style="background:#ea443533;color:#b71c1c;padding:1px 6px;border-radius:10px;font-weight:600;font-size:11px">NO URL</span>';
+            tr.innerHTML = `
+                <td style="padding:4px 8px">${i + 1}</td>
+                <td style="padding:4px 8px">${badge}</td>
+                <td style="padding:4px 8px;font-family:ui-monospace,monospace;color:#555">${selectorOf(r.img)}</td>
+                <td style="padding:4px 8px;font-family:ui-monospace,monospace;word-break:break-all;max-width:340px">${r.url || '<em style="color:#aaa">-</em>'}</td>
+                <td style="padding:4px 8px">${r.url ? `<img src="${r.url}" loading="lazy" referrerpolicy="no-referrer" style="max-height:40px;max-width:60px;object-fit:contain" onerror="this.style.opacity=.2">` : ''}</td>`;
+            tbody.appendChild(tr);
+        });
+    }
+
+    overlay.querySelector('[data-act="rerun"]').onclick = analyze;
+    overlay.querySelector('[data-act="copy-urls"]').onclick = async () => {
+        if (!lastKeepUrls.length) return;
+        try {
+            await navigator.clipboard.writeText(lastKeepUrls.join('\n'));
+            const b = overlay.querySelector('[data-act="copy-urls"]');
+            const orig = b.textContent;
+            b.textContent = `✅ ${lastKeepUrls.length}개 복사됨`;
+            setTimeout(() => b.textContent = orig, 1500);
+        } catch (e) { alert('클립보드 쓰기 실패: ' + e.message); }
+    };
+
+    await analyze();
+}

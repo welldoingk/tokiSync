@@ -144,7 +144,7 @@ export async function waitForContent(targetWindow, maxWaitMs = 8000, viewerCfg =
             const targetDoc = targetWindow.document;
             const title = targetDoc.title; // CORS 확인용 강제 접근
             
-            let imgSelector = '.view-padding div img';
+            let imgSelector = '.view-padding div img, .vw-imgs img';
             if (viewerCfg.imageContainer) {
                 const itemSel = viewerCfg.imageItem || 'img';
                 imgSelector = viewerCfg.imageContainer.split(',').map(c => `${c.trim()} ${itemSel}`).join(', ');
@@ -207,7 +207,7 @@ export async function scrollToLoad(iframeDoc, stallTimeoutMs = 20000, viewerCfg 
             .map(c => `${c.trim()} ${itemSel}`)
             .join(', ');
     } else {
-        targetSelectors = '.view-padding div img, .viewer-main img, #v_content img, .img-tag';
+        targetSelectors = '.view-padding div img, .viewer-main img, #v_content img, .img-tag, .vw-imgs img';
     }
     
     const allImages = Array.from(iframeDoc.querySelectorAll(targetSelectors));
