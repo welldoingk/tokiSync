@@ -110,7 +110,7 @@ export async function maybeRunQueue(downloadFn) {
         // 현재 페이지가 큐 항목이 아님 → 첫 대기 항목으로 이동
         const next = pending[0];
         logger.log(`📋 큐: 다음 시리즈로 이동 (${next.url})`, 'Queue');
-        setTimeout(() => { location.href = next.url; }, 1000);
+        setTimeout(() => { location.href = next.url; }, 5000);
         return;
     }
 
@@ -136,8 +136,8 @@ export async function maybeRunQueue(downloadFn) {
     // 다음 대기 항목으로
     const next = getQueue().find(i => i.status === 'pending');
     if (next) {
-        logger.log('📋 1.5초 후 다음 시리즈로 이동...', 'Queue');
-        setTimeout(() => { location.href = next.url; }, 1500);
+        logger.log('📋 5초 후 다음 시리즈로 이동...', 'Queue');
+        setTimeout(() => { location.href = next.url; }, 5000);
     } else {
         setRunning(false);
         logger.success('✅ 큐 전체 완료', 'Queue');
