@@ -72,7 +72,22 @@ def author_from_info(info):
     return ""
 
 
-def build_comicinfo(series, number, title, writer, pagecount):
+def norm_status(raw):
+    if not raw:
+        return ""
+    t = re.sub(r"[●•\s]", "", str(raw))
+    if re.search(r"완결|completed|complete|end|finished", t, re.I):
+        return "완결"
+    if re.search(r"연재|연중|진행|ongoing|serializing", t, re.I):
+        return "연재중"
+    return ""
+
+
+def status_from_info(info):
+    return norm_status((info.get("metadata") or {}).get("status"))
+
+
+def build_comicinfo(series, number, title, writer, pagecount, genre=""):
     lines = [
         '<?xml version="1.0" encoding="utf-8"?>',
         '<ComicInfo xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">',
@@ -82,6 +97,8 @@ def build_comicinfo(series, number, title, writer, pagecount):
     ]
     if writer:
         lines.append(f'  <Writer>{esc(writer)}</Writer>')
+    if genre:
+        lines.append(f'  <Genre>{esc(genre)}</Genre>')
     lines += [
         '  <LanguageISO>ko</LanguageISO>',
         f'  <PageCount>{pagecount}</PageCount>',
@@ -133,6 +150,7 @@ def main():
             info = load_info(series_dir)
             series_name = (info.get("title") or clean_series(folder)).strip()
             writer = author_from_info(info)
+            genre = status_from_info(info)
 
             try:
                 entries = os.listdir(series_dir)
@@ -148,7 +166,7 @@ def main():
                     with zipfile.ZipFile(cbz) as z:
                         pagecount = sum(1 for n in z.namelist()
                                         if n.lower().endswith(IMG_EXT))
-                    xml = build_comicinfo(series_name, number, title, writer, pagecount)
+                    xml = build_comicinfo(series_name, number, title, writer, pagecount, genre)
                     if args.apply:
                         rewrite_cbz(cbz, xml)
                     changed += 1

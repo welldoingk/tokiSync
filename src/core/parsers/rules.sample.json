@@ -14,6 +14,7 @@
           "attr": "src"
         },
         "status": "span.pill-status",
+        "summary": "p.hero-v2-desc",
         "tags": "div.hero-v2-tags"
       },
       "list": {
@@ -56,6 +57,7 @@
           "attr": "src"
         },
         "status": "span.pill-status",
+        "summary": "p.hero-v2-desc",
         "tags": "div.hero-v2-tags"
       },
       "list": {
