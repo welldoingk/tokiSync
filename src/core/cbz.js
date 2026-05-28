@@ -42,14 +42,17 @@ export class CbzBuilder {
         const title = metadata.title || "";
         const number = metadata.number || "";
         const writer = metadata.writer || "";
+        const summary = metadata.summary || "";
         const pageCount = this.chapters.reduce((acc, chap) => acc + chap.images.length, 0);
+
+        const summaryTag = summary ? `\n  <Summary>${this.escapeXml(summary)}</Summary>` : "";
 
         return `<?xml version="1.0" encoding="utf-8"?>
 <ComicInfo xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <Series>${this.escapeXml(series)}</Series>
   <Number>${number}</Number>
   <Title>${this.escapeXml(title)}</Title>
-  <Writer>${this.escapeXml(writer)}</Writer>
+  <Writer>${this.escapeXml(writer)}</Writer>${summaryTag}
   <LanguageISO>ko</LanguageISO>
   <PageCount>${pageCount}</PageCount>
   <Manga>YesAndRightToLeft</Manga>

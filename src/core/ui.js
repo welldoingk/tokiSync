@@ -495,7 +495,7 @@ export class MenuModal {
                 <select id="toki-sel-policy" class="toki-select">
                     <option value="individual">개별 파일</option>
                     <option value="zipOfCbzs">챕터 묶음</option>
-                    <option value="native">자동 분류</option>
+                    <option value="native">자동 분류 (NAS)</option>
                     <option value="drive">드라이브</option>
                 </select>
             </div>
@@ -513,10 +513,10 @@ export class MenuModal {
 
             <div id="toki-native-helper" class="toki-hidden toki-helper-box-blue">
                 <div class="toki-text-sm toki-text-primary toki-mb-10 toki-helper-desc">
-                    ⚠️ Native 모드는 브라우저 설정 변경이 필요합니다.
+                    📡 NAS WebDAV로 직접 업로드합니다. 상세 설정에서 WebDAV URL/계정을 입력하세요.
                 </div>
                 <button class="toki-btn-action toki-btn-secondary toki-btn-sm" id="toki-btn-test-native">
-                    📂 기능 동작 테스트 실행
+                    📡 WebDAV 연결 테스트
                 </button>
             </div>
 
@@ -705,17 +705,17 @@ export class MenuModal {
                     testNativeBtn.textContent = '⏳ 테스트 중...';
                     const success = await this.handlers.testNativeDownload();
                     if (success) {
-                        testNativeBtn.textContent = '✅ 테스트 성공 (폴더 확인)';
+                        testNativeBtn.textContent = '✅ 연결 성공 (NAS 확인)';
                         testNativeBtn.classList.add('toki-text-success');
                         testNativeBtn.classList.remove('toki-text-danger');
                     } else {
-                        testNativeBtn.textContent = '❌ 테스트 실패 (설정 확인)';
+                        testNativeBtn.textContent = '❌ 연결 실패 (설정 확인)';
                         testNativeBtn.classList.add('toki-text-danger');
                         testNativeBtn.classList.remove('toki-text-success');
                     }
                     setTimeout(() => {
                         testNativeBtn.disabled = false;
-                        testNativeBtn.textContent = '📂 자동 분류 기능 테스트';
+                        testNativeBtn.textContent = '📡 WebDAV 연결 테스트';
                         testNativeBtn.classList.remove('toki-text-success', 'toki-text-danger');
                     }, 3000);
                 }
