@@ -102,7 +102,8 @@ export function getConfig() {
         customRules: GM_getValue(CFG_CUSTOM_RULES, "[]"),
         webdavUrl: GM_getValue(CFG_WEBDAV_URL, ""),
         webdavUser: GM_getValue(CFG_WEBDAV_USER, ""),
-        webdavPass: GM_getValue(CFG_WEBDAV_PASS, "")
+        webdavPass: GM_getValue(CFG_WEBDAV_PASS, ""),
+        concurrency: parseInt(GM_getValue(CFG_CONCURRENCY, "1"), 10) || 1
     };
 }
 
@@ -167,6 +168,10 @@ export function showConfigModal() {
                     <label class="toki-label">WebDAV 비밀번호</label>
                     <input type="password" id="toki-cfg-webdav-pass" class="toki-input" placeholder="password" value="${config.webdavPass}">
                 </div>
+            </div>
+            <div class="toki-control-group">
+                <label class="toki-label">동시 업로드 수 (1~8, 다운로드는 항상 순차)</label>
+                <input type="number" id="toki-cfg-concurrency" class="toki-input" min="1" max="8" step="1" placeholder="1" value="${config.concurrency}">
             </div>
 
             <div class="toki-section-title">Global Policies</div>
@@ -270,6 +275,9 @@ export function showConfigModal() {
         const newWebdavUrl = document.getElementById('toki-cfg-webdav-url').value.trim();
         const newWebdavUser = document.getElementById('toki-cfg-webdav-user').value.trim();
         const newWebdavPass = document.getElementById('toki-cfg-webdav-pass').value;
+        let newConcurrency = parseInt(document.getElementById('toki-cfg-concurrency').value, 10);
+        if (!Number.isFinite(newConcurrency) || newConcurrency < 1) newConcurrency = 1;
+        if (newConcurrency > 8) newConcurrency = 8;
 
         // Validate Custom Rules JSON
         let validCustomRule = '[]';
@@ -312,6 +320,7 @@ export function showConfigModal() {
         setConfig(CFG_WEBDAV_URL, newWebdavUrl);
         setConfig(CFG_WEBDAV_USER, newWebdavUser);
         setConfig(CFG_WEBDAV_PASS, newWebdavPass);
+        setConfig(CFG_CONCURRENCY, String(newConcurrency));
 
         tokiAlert('설정이 저장되었습니다.');
         overlay.remove();
