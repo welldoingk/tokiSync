@@ -376,13 +376,16 @@ export async function main() {
                 const title = metadata.episodeTitle || "Current_Episode";
                 const seriesTitle = metadata.seriesTitle || "Unknown_Series";
 
+                // 1-b. 시리즈 메타(작가/줄거리/연재상태/장르) 추출
+                const seriesMeta = (typeof parser.getSeriesMetadata === 'function') ? parser.getSeriesMetadata() : {};
+
                 // 2. 빌더 생성 (카테고리에 따라)
                 const isNovel = (siteInfo.category === 'Novel' || siteInfo.category === 'novel');
                 let builder;
                 let extension = 'cbz';
                 if (isNovel) {
                     const novelFormat = getConfig().novelFormat || 'epub';
-                    builder = novelFormat === 'txt' ? new TxtBuilder() : new EpubBuilder(seriesTitle, { author: "TokiSync" });
+                    builder = novelFormat === 'txt' ? new TxtBuilder() : new EpubBuilder(seriesTitle, { author: seriesMeta.author || "" });
                     extension = novelFormat;
                 } else {
                     builder = new CbzBuilder(title);
@@ -405,7 +408,13 @@ export async function main() {
                 const zip = await builder.build({
                     series: seriesTitle,
                     title: title,
-                    number: tempItem.num
+                    number: tempItem.num,
+                    writer: seriesMeta.author || "",
+                    author: seriesMeta.author || "",
+                    summary: seriesMeta.summary || "",
+                    status: seriesMeta.status || "",
+                    tags: seriesMeta.tags || [],
+                    category: siteInfo.category
                 });
                 
                 const blob = await zip.generateAsync({ type: "blob", compression: getCbzCompression() });

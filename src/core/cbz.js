@@ -46,9 +46,14 @@ export class CbzBuilder {
         const pageCount = this.chapters.reduce((acc, chap) => acc + chap.images.length, 0);
 
         const summaryTag = summary ? `\n  <Summary>${this.escapeXml(summary)}</Summary>` : "";
-        // 연재/완결 → Genre 태그 (Kavita에서 장르 칩으로 표시·필터)
+        // 장르 = 연재/완결 상태 + 추출한 태그(판타지/먹방 등) 통합 (콤마 구분 → Kavita 장르 칩)
         const statusGenre = this.normalizeStatus(metadata.status);
-        const genreTag = statusGenre ? `\n  <Genre>${this.escapeXml(statusGenre)}</Genre>` : "";
+        const tagList = Array.isArray(metadata.tags) ? metadata.tags : [];
+        const genres = [...new Set([statusGenre, ...tagList].map(s => (s || '').trim()).filter(Boolean))];
+        const genreTag = genres.length ? `\n  <Genre>${this.escapeXml(genres.join(', '))}</Genre>` : "";
+        // 읽기 방향: 웹툰=세로(LTR), 만화=일본식 우→좌. 카테고리로 분기 (기존 RTL 하드코딩 수정)
+        const cat = (metadata.category || '').toString().toLowerCase();
+        const mangaTag = cat === 'webtoon' ? '<Manga>No</Manga>' : '<Manga>YesAndRightToLeft</Manga>';
 
         return `<?xml version="1.0" encoding="utf-8"?>
 <ComicInfo xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
@@ -58,7 +63,7 @@ export class CbzBuilder {
   <Writer>${this.escapeXml(writer)}</Writer>${genreTag}${summaryTag}
   <LanguageISO>ko</LanguageISO>
   <PageCount>${pageCount}</PageCount>
-  <Manga>YesAndRightToLeft</Manga>
+  ${mangaTag}
 </ComicInfo>`;
     }
 

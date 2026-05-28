@@ -335,8 +335,22 @@ export class GenericParser extends BaseParser {
         return {
             author: this._extractValue(document, meta.author) || "",
             status: this._extractValue(document, meta.status) || "연재중",
-            summary: this._extractValue(document, meta.summary) || ""
+            summary: this._extractValue(document, meta.summary) || "",
+            tags: this._extractTags(meta.tags)
         };
+    }
+
+    /** 장르 컨테이너에서 개별 태그 배열 추출 ("#판타지" 등 → ["판타지", ...]) */
+    _extractTags(selector) {
+        if (!selector) return [];
+        const sel = typeof selector === 'string' ? selector : selector.selector;
+        const container = document.querySelector(sel);
+        if (!container) return [];
+        const links = container.querySelectorAll('a');
+        const raw = links.length
+            ? Array.from(links).map(a => a.textContent)
+            : (container.innerText || '').split(/[#,\n]/);
+        return [...new Set(raw.map(s => s.replace(/[#\s]+/g, ' ').trim()).filter(Boolean))];
     }
 
     getViewerMetadata(viewerDocument) {
