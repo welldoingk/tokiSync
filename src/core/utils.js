@@ -1,5 +1,6 @@
 import { uploadToGAS } from './gas.js';
 import { LogBox, Notifier } from './ui.js';
+import { uploadWebDav } from './webdav.js';
 
 export async function blobToArrayBuffer(blob) {
     if (blob.arrayBuffer) {
@@ -443,42 +444,19 @@ export async function saveFile(data, filename, type = 'local', extension = 'zip'
         link.remove();
         console.log(`[Local] 완료`);
     } else if (type === 'native') {
-        // [v1.6.0] GM_download with subfolder support
+        // [WebDAV] "자동 분류" 정책 = NAS WebDAV 직접 업로드 (구 GM_download 대체)
+        // 경로: <webdavUrl>/<category>/<folderName>/<fullFileName>
         const folderName = metadata.folderName || "TokiSync";
-        // Final Path: "TokiSync/SeriesTitle/Filename.zip"
-        const finalPath = `TokiSync/${folderName}/${fullFileName}`.replace(/[<>:"|?*]/g, '_'); // Sanitization for safety
-
-        console.log(`[Native] 자동 분류 다운로드 시도... (${finalPath})`);
+        const category = metadata.category || (extension === 'epub' ? 'Novel' : 'Webtoon');
         const logger = LogBox.getInstance();
 
-        return new Promise((resolve, reject) => {
-            if (typeof GM_download !== 'function') {
-                const err = "GM_download 권한이 없거나 지원되지 않는 환경입니다.";
-                logger.error(`[Native] 실패: ${err}`);
-                reject(new Error(err));
-                return;
-            }
-
-            GM_download({
-                url: URL.createObjectURL(content),
-                name: finalPath,
-                saveAs: false, // Use browser setting or automatic
-                onload: () => {
-                   logger.success(`[Native] 자동 저장 완료: ${fullFileName}`);
-                   resolve(true);
-                },
-                onerror: (err) => {
-                    const errMsg = err ? (err.error || err.reason || "알 수 없는 오류") : "알 수 없는 오류";
-                    if (err && err.error === 'not_whitelisted') {
-                        logger.critical(`[Native 방어] 다운로드 차단됨: 지원하지 않는 확장자입니다.\n👉 템퍼몽키 [설정] -> [고급] -> [Whitelisted File Extensions]에 '${extension}' 확장자(cbz/epub)를 추가해주세요.`);
-                    } else {
-                        logger.error(`[Native] 다운로드 실패: ${errMsg}`);
-                    }
-                    console.error("[Native Error]", err);
-                    reject(new Error(errMsg));
-                }
-            });
-        });
+        try {
+            await uploadWebDav(content, category, folderName, fullFileName);
+            return true;
+        } catch (err) {
+            logger.error(`[WebDAV] 업로드 실패: ${err.message}`);
+            throw err;
+        }
     } else if (type === 'drive') {
         const logger = LogBox.getInstance();
         logger.log(`[Drive] 구글 드라이브 업로드 준비 중... (${fullFileName})`);

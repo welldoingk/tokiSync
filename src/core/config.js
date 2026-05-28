@@ -15,6 +15,9 @@ export const CFG_GLOBAL_URL_EXCLUDE = "TOKI_GLOBAL_URL_EXCLUDE";
 export const CFG_CBZ_COMPRESSION = "TOKI_CBZ_COMPRESSION"; // "DEFLATE" | "STORE"
 export const CFG_CONCURRENCY = "TOKI_CONCURRENCY";         // 1 = sequential (default), 2+ = parallel chapters
 export const CFG_SCROLL_TIMEOUT_MS = "TOKI_SCROLL_TIMEOUT_MS"; // ms, default 20000
+export const CFG_WEBDAV_URL = "TOKI_WEBDAV_URL";   // 예: http://192.168.0.50:5005/books
+export const CFG_WEBDAV_USER = "TOKI_WEBDAV_USER";
+export const CFG_WEBDAV_PASS = "TOKI_WEBDAV_PASS";
 
 /**
  * [custom] CBZ 압축 모드 — DEFLATE (기본, 작음/느림) 또는 STORE (큼/빠름)
@@ -96,7 +99,10 @@ export function getConfig() {
         novelMode: GM_getValue(CFG_NOVEL_MODE, "perChapter"), // default: chapter-by-chapter
         novelFormat: GM_getValue(CFG_NOVEL_FORMAT, "epub"), // default: EPUB
         remoteRuleUrl: remoteRuleUrl,
-        customRules: GM_getValue(CFG_CUSTOM_RULES, "[]")
+        customRules: GM_getValue(CFG_CUSTOM_RULES, "[]"),
+        webdavUrl: GM_getValue(CFG_WEBDAV_URL, ""),
+        webdavUser: GM_getValue(CFG_WEBDAV_USER, ""),
+        webdavPass: GM_getValue(CFG_WEBDAV_PASS, "")
     };
 }
 
@@ -147,13 +153,29 @@ export function showConfigModal() {
                 <input type="password" id="toki-cfg-apikey" class="toki-input" placeholder="API Key" value="${config.apiKey}">
             </div>
 
+            <div class="toki-section-title">NAS WebDAV (자동 분류 정책)</div>
+            <div class="toki-control-group">
+                <label class="toki-label">WebDAV URL</label>
+                <input type="text" id="toki-cfg-webdav-url" class="toki-input" placeholder="http://192.168.0.50:5005/books" value="${config.webdavUrl}">
+            </div>
+            <div class="toki-form-grid">
+                <div class="toki-control-group">
+                    <label class="toki-label">WebDAV 계정</label>
+                    <input type="text" id="toki-cfg-webdav-user" class="toki-input" placeholder="user" value="${config.webdavUser}">
+                </div>
+                <div class="toki-control-group">
+                    <label class="toki-label">WebDAV 비밀번호</label>
+                    <input type="password" id="toki-cfg-webdav-pass" class="toki-input" placeholder="password" value="${config.webdavPass}">
+                </div>
+            </div>
+
             <div class="toki-section-title">Global Policies</div>
             <div class="toki-control-group">
                 <label class="toki-label">다운로드 정책</label>
                 <select id="toki-cfg-policy" class="toki-select">
                     <option value="individual">개별 파일 (Individual)</option>
                     <option value="zipOfCbzs">챕터 묶음 (ZIP of CBZs)</option>
-                    <option value="native">자동 분류 (Native)</option>
+                    <option value="native">자동 분류 (NAS WebDAV)</option>
                     <option value="drive">드라이브 업로드 (GoogleDrive)</option>
                 </select>
             </div>
@@ -245,6 +267,9 @@ export function showConfigModal() {
         const newNovelFormat = document.getElementById('toki-cfg-novel-format').value;
         const newRemoteRule = document.getElementById('toki-cfg-remote-rule').value.trim();
         const newCustomRule = document.getElementById('toki-cfg-custom-rule').value.trim() || '[]';
+        const newWebdavUrl = document.getElementById('toki-cfg-webdav-url').value.trim();
+        const newWebdavUser = document.getElementById('toki-cfg-webdav-user').value.trim();
+        const newWebdavPass = document.getElementById('toki-cfg-webdav-pass').value;
 
         // Validate Custom Rules JSON
         let validCustomRule = '[]';
@@ -284,6 +309,9 @@ export function showConfigModal() {
         setConfig(CFG_NOVEL_FORMAT, newNovelFormat);
         setConfig(CFG_REMOTE_RULE_URL, newRemoteRule);
         setConfig(CFG_CUSTOM_RULES, validCustomRule);
+        setConfig(CFG_WEBDAV_URL, newWebdavUrl);
+        setConfig(CFG_WEBDAV_USER, newWebdavUser);
+        setConfig(CFG_WEBDAV_PASS, newWebdavPass);
 
         tokiAlert('설정이 저장되었습니다.');
         overlay.remove();

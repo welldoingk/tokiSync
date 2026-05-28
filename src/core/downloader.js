@@ -10,6 +10,7 @@ import { getConfig, isConfigValid, getCbzCompression, getConcurrency } from './c
 import { startSilentAudio, stopSilentAudio } from './anti_sleep.js';
 import { fetchHistory, refreshCacheAfterUpload, getBooksByCacheId, initUpdateUploadViaGASRelay, getMergeIndexFragment } from './gas.js';
 import { fetchHistoryDirect, checkSingleHistoryDirect, updateDirect } from './network.js';
+import { fetchHistoryWebDav, isWebDavConfigValid } from './webdav.js';
 import { fetchNovelText, fetchComicImages, closeActivePopup } from './novel-decryptor.js';
 
 // Sleep Policy Presets
@@ -205,6 +206,14 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
             destination = 'local';
         }
 
+        // [WebDAV] Graceful Fallback for missing NAS WebDAV configuration
+        if (destination === 'native' && !isWebDavConfigValid()) {
+            tokiAlert('NAS WebDAV URL이 설정되지 않았습니다. 임시로 개별 로컬 다운로드 정책으로 전환합니다.');
+            logger.warn('⚠️ WebDAV 설정 누락 감지. 정책을 개별 로컬 다운로드로 자동 전환합니다.', 'System');
+            buildingPolicy = 'individual';
+            destination = 'local';
+        }
+
         const configNovelFormat = getConfig().novelFormat || 'epub';
         const EXTENSION_MAP = {
             'Novel': configNovelFormat,
@@ -288,18 +297,18 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
             // We'll append batch info later
         }
 
-        // [v1.4.0] Upload Series Thumbnail (if uploading to Drive)
-        if (destination === 'drive') {
+        // [v1.4.0] Upload Series Thumbnail (Drive: _Thumbnails 리다이렉트 / native: 시리즈 폴더에 cover.jpg → Kavita 표지)
+        if (destination === 'drive' || destination === 'native') {
             try {
                 const thumbnailUrl = parser.getThumbnailUrl();
                 if (thumbnailUrl) {
                     logger.log('📷 시리즈 썸네일 업로드 중...');
                     const thumbBlob = await fetchBlobWithXHR(thumbnailUrl);
-                    
-                    // Upload as 'cover.jpg' - network.js will auto-redirect to _Thumbnails/{ID}.jpg
-                    // saveFile(data, filename, type, extension, metadata)
-                    // → fullFileName = "cover.jpg"
-                    await saveFile(thumbBlob, 'cover', 'drive', 'jpg', { 
+
+                    // Upload as 'cover.jpg'
+                    // - drive: network.js가 _Thumbnails/{ID}.jpg로 자동 리다이렉트
+                    // - native: WebDAV 시리즈 폴더에 cover.jpg로 저장 (Kavita 표지 자동 인식)
+                    await saveFile(thumbBlob, 'cover', destination, 'jpg', {
                         category,
                         folderName: rootFolder  // Target folder for upload
                     });
@@ -319,6 +328,29 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
 
         let historyCheckTimeoutFlag = false;
         let historyFolderId = null;
+
+        // [WebDAV] NAS 업로드 기록 사전 조회 (Smart Skip) — PROPFIND 기반
+        if (destination === 'native') {
+            try {
+                if (forceOverwrite) {
+                    logger.log('⚠️ 강제 재다운로드 옵션 활성화: 기존 NAS 기록 무시 (전체 덮어쓰기)');
+                } else {
+                    logger.log('🗂️ NAS WebDAV 업로드 기록 및 용량 확인 중 (Smart Skip)...');
+                    const histResult = await fetchHistoryWebDav(rootFolder, category);
+                    if (histResult.success) {
+                        histResult.data.forEach(id => {
+                            uploadedHistorySet.add(id.toString());
+                            uploadedHistorySet.add(parseInt(id).toString());
+                        });
+                        if (uploadedHistorySet.size > 0) {
+                            logger.log(`⏭️ 기존 NAS 업로드 에피소드 ${histResult.data.length}개 감지 — 건너뜁니다.`);
+                        }
+                    }
+                }
+            } catch (histErr) {
+                logger.log(`⚠️ NAS 업로드 기록 조회 실패(전체 업로드 진행): ${histErr.message}`, 'warn');
+            }
+        }
 
         if (destination === 'drive') {
             try {
@@ -452,16 +484,16 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
 
             // [v1.5.0 Smart Skip] Skip already-uploaded episodes (Drive policy only)
             // [v1.7.1] Bypass skipping in Single Volume mode (we need all chapters)
-            if (!isSingleVolume && destination === 'drive') {
+            if (!isSingleVolume && (destination === 'drive' || destination === 'native')) {
                 const numStr = item.num ? item.num.toString() : '';
                 const numPlain = parseInt(numStr).toString();
                 if (uploadedHistorySet.size > 0 && (uploadedHistorySet.has(numStr) || uploadedHistorySet.has(numPlain))) {
                     logger.log(`⏭️ 건너뜀 (이미 업로드됨): ${item.title}`);
                     continue;
                 }
-                
-                // [v1.7.4] 페일세이프: 타임아웃 발생 시 개별 단위 핀셋 조회 수행
-                if (historyCheckTimeoutFlag && historyFolderId) {
+
+                // [v1.7.4] 페일세이프: 타임아웃 발생 시 개별 단위 핀셋 조회 수행 (Drive 전용)
+                if (destination === 'drive' && historyCheckTimeoutFlag && historyFolderId) {
                     logger.log(`🔍 [페일세이프] 타임아웃 2차 단일 로컬/원격 검사 중: ${item.title}`);
                     const isUploaded = await checkSingleHistoryDirect(historyFolderId, numStr);
                     if (isUploaded) {
@@ -553,11 +585,14 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
                 const fullFilename = `${item.num} - ${chapterTitle}`;
 
                 // [v1.6.0] Kavita Metadata Insertion
-                const innerZip = await currentBuilder.build({ 
+                // [fix] writer/author = 추출한 실제 작가 (없으면 사이트명 폴백). summary도 전달.
+                const innerZip = await currentBuilder.build({
                     series: seriesTitle || rootFolder,
                     title: chapterTitle,
                     number: item.num,
-                    writer: siteName
+                    writer: seriesMetadata.author || siteName,
+                    author: seriesMetadata.author || siteName,
+                    summary: seriesMetadata.summary || ""
                 });
                 const blob = await innerZip.generateAsync({ type: "blob", compression: getCbzCompression() });
 
@@ -721,7 +756,9 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
                     const finalZip = await masterNovelBuilder.build({
                         series: seriesTitle || rootFolder,
                         title: seriesTitle || rootFolder,
-                        writer: siteName
+                        writer: seriesMetadata.author || siteName,
+                        author: seriesMetadata.author || siteName,
+                        summary: seriesMetadata.summary || ""
                     });
                     const finalBlob = await finalZip.generateAsync({ type: "blob", compression: getCbzCompression() });
                     
