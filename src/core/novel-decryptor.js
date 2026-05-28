@@ -5,6 +5,7 @@
  */
 
 import { tokiAlert } from './ui.js';
+import { getConfig } from './config.js';
 
 let activePopupRef = null;
 
@@ -193,8 +194,10 @@ async function fetchMediaViaPopupSingleAttempt(episodeUrl, targetType = 'novel',
                 if (contentType === targetType) {
                     cleanup();
 
-                    // WAF mitigation delay (Jitter 3s - 5s)
-                    const jitterDelay = 3000 + Math.random() * 2000;
+                    // WAF mitigation delay (지터: 설정 기준초 base ~ base+2s, 기본 3 → 3~5s)
+                    let _base = 3;
+                    try { _base = getConfig().wafJitterSec; if (!Number.isFinite(_base)) _base = 3; } catch (e) {}
+                    const jitterDelay = _base * 1000 + Math.random() * 2000;
                     console.log(`[Controller] WAF 행동 패턴 탐지 방어: 랜덤 지터 대기 시작... (${(jitterDelay / 1000).toFixed(2)}초)`);
                     
                     await new Promise(r => setTimeout(r, jitterDelay));

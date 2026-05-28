@@ -18,6 +18,8 @@ export const CFG_SCROLL_TIMEOUT_MS = "TOKI_SCROLL_TIMEOUT_MS"; // ms, default 20
 export const CFG_WEBDAV_URL = "TOKI_WEBDAV_URL";   // 예: http://192.168.0.50:5005/books
 export const CFG_WEBDAV_USER = "TOKI_WEBDAV_USER";
 export const CFG_WEBDAV_PASS = "TOKI_WEBDAV_PASS";
+export const CFG_IMG_CONCURRENCY = "TOKI_IMG_CONCURRENCY"; // 회차 내 이미지 동시 다운로드 수 (기본 8)
+export const CFG_WAF_JITTER_SEC = "TOKI_WAF_JITTER_SEC";   // 회차 사이 WAF 지터 기준 초 (기본 3 → 3~5초)
 
 /**
  * [custom] CBZ 압축 모드 — DEFLATE (기본, 작음/느림) 또는 STORE (큼/빠름)
@@ -103,7 +105,9 @@ export function getConfig() {
         webdavUrl: GM_getValue(CFG_WEBDAV_URL, ""),
         webdavUser: GM_getValue(CFG_WEBDAV_USER, ""),
         webdavPass: GM_getValue(CFG_WEBDAV_PASS, ""),
-        concurrency: parseInt(GM_getValue(CFG_CONCURRENCY, "1"), 10) || 1
+        concurrency: parseInt(GM_getValue(CFG_CONCURRENCY, "1"), 10) || 1,
+        imgConcurrency: Math.min(16, Math.max(1, parseInt(GM_getValue(CFG_IMG_CONCURRENCY, "8"), 10) || 8)),
+        wafJitterSec: Math.min(10, Math.max(0, parseFloat(GM_getValue(CFG_WAF_JITTER_SEC, "3")) || 3))
     };
 }
 
@@ -172,6 +176,18 @@ export function showConfigModal() {
             <div class="toki-control-group">
                 <label class="toki-label">동시 업로드 수 (1~8, 다운로드는 항상 순차)</label>
                 <input type="number" id="toki-cfg-concurrency" class="toki-input" min="1" max="8" step="1" placeholder="1" value="${config.concurrency}">
+            </div>
+
+            <div class="toki-section-title">다운로드 속도 (밴 위험 주의)</div>
+            <div class="toki-form-grid">
+                <div class="toki-control-group">
+                    <label class="toki-label">이미지 동시 다운로드 (1~16, 기본 8)</label>
+                    <input type="number" id="toki-cfg-img-concurrency" class="toki-input" min="1" max="16" step="1" placeholder="8" value="${config.imgConcurrency}">
+                </div>
+                <div class="toki-control-group">
+                    <label class="toki-label">WAF 지터 기준초 (기본 3 → 3~5초, 낮출수록 빠르지만 밴↑)</label>
+                    <input type="number" id="toki-cfg-waf-jitter" class="toki-input" min="0" max="10" step="0.5" placeholder="3" value="${config.wafJitterSec}">
+                </div>
             </div>
 
             <div class="toki-section-title">Global Policies</div>
@@ -278,6 +294,12 @@ export function showConfigModal() {
         let newConcurrency = parseInt(document.getElementById('toki-cfg-concurrency').value, 10);
         if (!Number.isFinite(newConcurrency) || newConcurrency < 1) newConcurrency = 1;
         if (newConcurrency > 8) newConcurrency = 8;
+        let newImgConc = parseInt(document.getElementById('toki-cfg-img-concurrency').value, 10);
+        if (!Number.isFinite(newImgConc) || newImgConc < 1) newImgConc = 8;
+        if (newImgConc > 16) newImgConc = 16;
+        let newWafJitter = parseFloat(document.getElementById('toki-cfg-waf-jitter').value);
+        if (!Number.isFinite(newWafJitter) || newWafJitter < 0) newWafJitter = 3;
+        if (newWafJitter > 10) newWafJitter = 10;
 
         // Validate Custom Rules JSON
         let validCustomRule = '[]';
@@ -321,6 +343,8 @@ export function showConfigModal() {
         setConfig(CFG_WEBDAV_USER, newWebdavUser);
         setConfig(CFG_WEBDAV_PASS, newWebdavPass);
         setConfig(CFG_CONCURRENCY, String(newConcurrency));
+        setConfig(CFG_IMG_CONCURRENCY, String(newImgConc));
+        setConfig(CFG_WAF_JITTER_SEC, String(newWafJitter));
 
         tokiAlert('설정이 저장되었습니다.');
         overlay.remove();

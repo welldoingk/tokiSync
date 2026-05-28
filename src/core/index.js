@@ -232,18 +232,19 @@ import { scrollToLoad, fetchBlobWithXHR, blobToArrayBuffer, waitForContent, slee
                             console.log("[TokiSync-Worker] 🎯 웹툰 콘텐츠 감지 완료! 1.5초 안정화 대기 시작...");
                         }
 
-                        // 2) 1.5초 DOM 안정화 딜레이 (사용자 제안 반영 - 스크롤 꼬임 완벽 방지)
-                        await sleep(1500);
+                        // 2) DOM 안정화 딜레이 (1.5초 → 0.8초, 스크롤 꼬임 방지 최소선)
+                        await sleep(800);
 
-                        console.log("[TokiSync-Worker] 🚀 1.5초 안정화 완료. 1차 스크롤 및 다운로드 돌입.");
+                        console.log("[TokiSync-Worker] 🚀 안정화 완료. 1차 스크롤 및 다운로드 돌입.");
 
                         // 3) 지연 로딩 이미지 스크롤 활성화 (부모가 제공한 viewerCfg 적용)
                         await scrollToLoad(document, 25000, viewerCfg);
 
-                        // 이미지 다운로드를 처리하는 비동기 헬퍼 정의 (동시성 5개 한계 제어)
+                        // 이미지 다운로드를 처리하는 비동기 헬퍼 정의 (동시성: 설정값, 기본 8)
                         const runImageDownloads = async (imageUrls) => {
                             const downloaded = [];
-                            const CONCURRENCY_LIMIT = 5;
+                            let CONCURRENCY_LIMIT = 8;
+                            try { CONCURRENCY_LIMIT = getConfig().imgConcurrency || 8; } catch (e) {}
 
                             for (let i = 0; i < imageUrls.length; i += CONCURRENCY_LIMIT) {
                                 const chunk = imageUrls.slice(i, i + CONCURRENCY_LIMIT);

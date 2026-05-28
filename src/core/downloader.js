@@ -104,7 +104,8 @@ export async function processItem(item, builder, siteInfo, iframe, parser, serie
             throw new Error(`추출 실패 (이미지 팝업 패키지 획득 불가)`);
         }
 
-        await sleep(policy.min, policy.max);
+        // [속도] 만화는 fetchComicImages 내부 WAF 지터가 이미 회차 간격을 벌리므로
+        // 여기서의 중복 sleep 제거 (이중 대기 방지)
     }
 }
 
