@@ -9,6 +9,7 @@
       "author": "div.hero-v2-author",
       "thumb": { "selector": "div.hero-v2-thumb > img", "attr": "src" },
       "status": "span.pill-status",
+      "summary": "p.hero-v2-desc",
       "tags": "div.hero-v2-tags"
     },
     "list": {

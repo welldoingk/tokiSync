@@ -46,17 +46,29 @@ export class CbzBuilder {
         const pageCount = this.chapters.reduce((acc, chap) => acc + chap.images.length, 0);
 
         const summaryTag = summary ? `\n  <Summary>${this.escapeXml(summary)}</Summary>` : "";
+        // 연재/완결 → Genre 태그 (Kavita에서 장르 칩으로 표시·필터)
+        const statusGenre = this.normalizeStatus(metadata.status);
+        const genreTag = statusGenre ? `\n  <Genre>${this.escapeXml(statusGenre)}</Genre>` : "";
 
         return `<?xml version="1.0" encoding="utf-8"?>
 <ComicInfo xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <Series>${this.escapeXml(series)}</Series>
   <Number>${number}</Number>
   <Title>${this.escapeXml(title)}</Title>
-  <Writer>${this.escapeXml(writer)}</Writer>${summaryTag}
+  <Writer>${this.escapeXml(writer)}</Writer>${genreTag}${summaryTag}
   <LanguageISO>ko</LanguageISO>
   <PageCount>${pageCount}</PageCount>
   <Manga>YesAndRightToLeft</Manga>
 </ComicInfo>`;
+    }
+
+    /** "● 완결" / "completed" / "연재중" 등 → "완결" | "연재중" | "" (정규화) */
+    normalizeStatus(raw) {
+        if (!raw) return "";
+        const t = String(raw).replace(/[●•\s]/g, "");
+        if (/(완결|completed|complete|end|finished)/i.test(t)) return "완결";
+        if (/(연재|연중|진행|ongoing|serializing)/i.test(t)) return "연재중";
+        return "";
     }
 
     escapeXml(unsafe) {

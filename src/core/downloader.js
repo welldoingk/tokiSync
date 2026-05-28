@@ -607,7 +607,8 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
                     number: item.num,
                     writer: seriesMetadata.author || siteName,
                     author: seriesMetadata.author || siteName,
-                    summary: seriesMetadata.summary || ""
+                    summary: seriesMetadata.summary || "",
+                    status: seriesMetadata.status || ""
                 });
                 const blob = await innerZip.generateAsync({ type: "blob", compression: getCbzCompression() });
 
@@ -787,7 +788,8 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
                         title: seriesTitle || rootFolder,
                         writer: seriesMetadata.author || siteName,
                         author: seriesMetadata.author || siteName,
-                        summary: seriesMetadata.summary || ""
+                        summary: seriesMetadata.summary || "",
+                        status: seriesMetadata.status || ""
                     });
                     const finalBlob = await finalZip.generateAsync({ type: "blob", compression: getCbzCompression() });
                     
