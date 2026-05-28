@@ -11,6 +11,7 @@ import { ParserFactory } from './parsers/ParserFactory.js';
 import { getOAuthToken, fetchHistoryDirect } from './network.js';
 
 import { getCommonPrefix, blobToArrayBuffer, saveFile } from './utils.js';
+import { registerQueueMenu, maybeRunQueue } from './queue.js';
 
 export async function main() {
     console.log("🚀 TokiDownloader Loaded (New Core v1.20.5)");
@@ -499,6 +500,11 @@ export async function main() {
     // Initial load
     console.log('[TokiSync] Starting history sync...');
     syncHistory();
+
+    // -- 다중 시리즈 자동 큐 --
+    registerQueueMenu();
+    // 큐 실행 중이면: 현재 시리즈 전체 다운로드 후 다음 시리즈로 자동 이동 (저장된 정책 사용)
+    maybeRunQueue(() => tokiDownload(undefined, getConfig().policy, false));
 
     // Cross-tab sync listener
     document.addEventListener("visibilitychange", () => {
