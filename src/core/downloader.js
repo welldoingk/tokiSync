@@ -467,16 +467,31 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
 
         // --- Processing Loop ---
         // [custom] CFG_CONCURRENCY 옵션 — 사용자가 설정한 동시 처리 수.
-        // 기본 1 = 순차. 2 이상 설정해도 현재는 안전을 위해 순차로 동작.
-        // 본격 병렬화는 별도 PR에서 buildingPolicy/masterZip 배치/Fast Path 락 정리 후 도입 예정.
-        const _concurrency = getConcurrency();
-        if (_concurrency > 1) {
-            logger.warn(
-                `⚙️ 동시 처리 ${_concurrency} 설정됨 — 현재 버전은 안전을 위해 순차 처리로 동작합니다. ` +
-                `(masterZip 배치/Fast Path 상호 배제 정리 후 다음 빌드에서 활성화 예정)`,
-                'Downloader:Concurrency'
-            );
+        // [pipeline] 다운로드는 순차 유지, 업로드만 병렬(bounded). getConcurrency()=동시 업로드 수.
+        // 1이어도 "다음 회차 다운로드 ↔ 현재 회차 업로드" 1-depth 파이프라인으로 겹쳐 처리.
+        // 2+면 업로드 N개까지 동시 진행. 다운로드 요청은 절대 병렬화하지 않음(소스 사이트 밴 방지).
+        const uploadConcurrency = getConcurrency();
+        const inflightUploads = new Set();
+        const uploadFailures = [];
+        if (uploadConcurrency > 1) {
+            logger.log(`⚙️ 업로드 파이프라인: 동시 업로드 ${uploadConcurrency}개 (다운로드는 순차 유지)`, 'Downloader:Pipeline');
         }
+        const scheduleUpload = async (taskFn, label) => {
+            // 풀이 가득 차면 하나 끝날 때까지만 대기 → 그 사이 다운로드 루프는 계속 진행
+            while (inflightUploads.size >= uploadConcurrency) {
+                await Promise.race(inflightUploads);
+            }
+            const p = (async () => {
+                try {
+                    await taskFn();
+                } catch (e) {
+                    uploadFailures.push({ label, error: e.message });
+                    logger.error(`[Upload] 실패 (${label}): ${e.message}`, 'Downloader:Upload');
+                }
+            })();
+            inflightUploads.add(p);
+            p.finally(() => inflightUploads.delete(p));
+        };
         for (let i = 0; i < list.length; i++) {
             const item = parser.parseListItem(list[i].element || list[i]); 
             console.clear();
@@ -617,9 +632,11 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
                         masterZip = new JSZip();
                     }
                 } else if (buildingPolicy === 'individual') {
+                    // [pipeline] 업로드를 풀에 스케줄 → 다음 회차 다운로드와 겹쳐 진행
+                    const cachedFileId = episodeCacheMap.get(fullFilename);
+                    const uploadTask = async () => {
                     // [v1.6.0] Phase B-3: Fast Path Smart Branching
                     let success = false;
-                    const cachedFileId = episodeCacheMap.get(fullFilename);
 
                     if (destination === 'drive' && cachedFileId) {
                         try {
@@ -700,6 +717,8 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
                             category: category
                         });
                     }
+                    }; // end uploadTask
+                    await scheduleUpload(uploadTask, fullFilename);
                 }
             }
             
@@ -727,6 +746,16 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
                 // Visual feedback (v1.9.5 consistent styling)
                 item.element.classList.add('toki-downloaded');
             }
+        }
+
+        // [pipeline] 루프 종료 후 남은 업로드 모두 완료 대기
+        if (inflightUploads.size > 0) {
+            logger.log(`⏳ 남은 업로드 ${inflightUploads.size}개 완료 대기 중...`, 'Downloader:Pipeline');
+            await Promise.all(inflightUploads);
+        }
+        if (uploadFailures.length > 0) {
+            const labels = uploadFailures.slice(0, 3).map(f => f.label).join(', ');
+            logger.warn(`⚠️ 업로드 실패 ${uploadFailures.length}개: ${labels}${uploadFailures.length > 3 ? ' 외' : ''}`, 'Downloader:Upload');
         }
 
 
