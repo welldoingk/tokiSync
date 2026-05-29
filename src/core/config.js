@@ -20,6 +20,11 @@ export const CFG_WEBDAV_USER = "TOKI_WEBDAV_USER";
 export const CFG_WEBDAV_PASS = "TOKI_WEBDAV_PASS";
 export const CFG_IMG_CONCURRENCY = "TOKI_IMG_CONCURRENCY"; // 회차 내 이미지 동시 다운로드 수 (기본 8)
 export const CFG_WAF_JITTER_SEC = "TOKI_WAF_JITTER_SEC";   // 회차 사이 WAF 지터 기준 초 (기본 3 → 3~5초)
+// -- 원격 제어 (컨트롤 API 폴링) --
+export const CFG_REMOTE_ENABLED = "TOKI_REMOTE_ENABLED";   // "1" | "0"
+export const CFG_REMOTE_API_URL = "TOKI_REMOTE_API_URL";   // 예: http://192.168.0.x:8787
+export const CFG_REMOTE_API_TOKEN = "TOKI_REMOTE_API_TOKEN";
+export const CFG_REMOTE_POLL_SEC = "TOKI_REMOTE_POLL_SEC"; // 폴링 주기(초), 기본 5
 
 /**
  * [custom] CBZ 압축 모드 — DEFLATE (기본, 작음/느림) 또는 STORE (큼/빠름)
@@ -112,9 +117,26 @@ export function getConfig() {
 }
 
 /**
+ * 원격 제어 설정 조회
+ * @returns {{enabled: boolean, url: string, token: string, pollSec: number}}
+ */
+export function getRemoteConfig() {
+    const gv = (k, d) => {
+        try { return typeof GM_getValue !== 'undefined' ? GM_getValue(k, d) : d; }
+        catch { return d; }
+    };
+    return {
+        enabled: gv(CFG_REMOTE_ENABLED, '0') === '1',
+        url: gv(CFG_REMOTE_API_URL, ''),
+        token: gv(CFG_REMOTE_API_TOKEN, ''),
+        pollSec: Math.max(2, parseInt(gv(CFG_REMOTE_POLL_SEC, '5'), 10) || 5),
+    };
+}
+
+/**
  * Set configuration value
- * @param {string} key 
- * @param {string} value 
+ * @param {string} key
+ * @param {string} value
  */
 export function setConfig(key, value) {
     GM_setValue(key, value);

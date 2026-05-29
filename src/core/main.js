@@ -12,6 +12,7 @@ import { getOAuthToken, fetchHistoryDirect } from './network.js';
 
 import { getCommonPrefix, blobToArrayBuffer, saveFile } from './utils.js';
 import { registerQueueMenu, maybeRunQueue } from './queue.js';
+import { registerRemoteMenu, startRemoteSync } from './remote.js';
 
 export async function main() {
     console.log("🚀 TokiDownloader Loaded (New Core v1.20.5)");
@@ -505,6 +506,10 @@ export async function main() {
     registerQueueMenu();
     // 큐 실행 중이면: 현재 시리즈 전체 다운로드 후 다음 시리즈로 자동 이동 (저장된 정책 사용)
     maybeRunQueue(() => tokiDownload(undefined, getConfig().policy, false));
+
+    // -- 원격 제어 (컨트롤 API 폴링) --
+    registerRemoteMenu();
+    startRemoteSync();
 
     // Cross-tab sync listener
     document.addEventListener("visibilitychange", () => {

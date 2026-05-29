@@ -1,0 +1,16 @@
+{
+  "name": "tokisync-control-api",
+  "version": "0.1.0",
+  "description": "tokiSync 원격 제어 컨트롤 API + 대시보드 (zero-dependency)",
+  "type": "module",
+  "private": true,
+  "main": "control-api.js",
+  "scripts": {
+    "start": "node control-api.js",
+    "dev": "node control-api.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "ISC"
+}
