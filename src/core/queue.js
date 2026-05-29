@@ -16,6 +16,11 @@ const K_RUNNING = 'TOKI_QUEUE_RUNNING';
 
 let _ranThisLoad = false; // 한 페이지 로드에서 큐 처리 1회 보장
 
+/** 원격 대시보드용 진행률 이벤트 방출(remote.js가 수신) */
+function _emitProgress(detail) {
+    try { window.dispatchEvent(new CustomEvent('toki:progress', { detail })); } catch {}
+}
+
 function _get(key, def) {
     try { return typeof GM_getValue !== 'undefined' ? GM_getValue(key, def) : def; }
     catch { return def; }
@@ -34,7 +39,7 @@ export function isRunning() { return _get(K_RUNNING, '0') === '1'; }
 export function setRunning(b) { _set(K_RUNNING, b ? '1' : '0'); }
 
 /** 비교용 URL 정규화 — pathname만 사용(도메인 미러 변동에 강건) */
-function pathKey(u) {
+export function pathKey(u) {
     try { return new URL(u, location.href).pathname.replace(/\/+$/, ''); }
     catch { return (u || '').trim().replace(/[?#].*$/, '').replace(/\/+$/, ''); }
 }
@@ -119,15 +124,18 @@ export async function maybeRunQueue(downloadFn) {
     const pos = q.filter(i => i.status !== 'pending').length + 1;
     logger.show();
     logger.log(`📋 큐 처리 ${pos}/${q.length}: ${location.href}`, 'Queue');
+    _emitProgress({ phase: '다운로드 중', pos, total: q.length, url: location.href });
     try {
         await downloadFn();
         active.status = 'done';
         active.title = document.title || active.title;
         logger.success(`📋 큐 항목 완료 (${pos}/${q.length})`, 'Queue');
+        _emitProgress({ phase: '항목 완료', pos, total: q.length, url: location.href });
     } catch (e) {
         active.status = 'error';
         active.error = e && e.message ? e.message : String(e);
         logger.error(`📋 큐 항목 실패: ${active.error}`, 'Queue');
+        _emitProgress({ phase: '항목 실패', pos, total: q.length, url: location.href, error: active.error });
     }
     // 저장(인덱스 보존)
     q[idx] = active;

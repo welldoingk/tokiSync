@@ -166,6 +166,8 @@ async function fetchMediaViaPopupSingleAttempt(episodeUrl, targetType = 'novel',
             // 2. 캡차/클라우드플레어 대기 상태 수신
             if (event.data.type === 'TOKI_CAPTCHA_DETECTED') {
                 console.warn(`[Controller] ⚠️ 팝업에서 클라우드플레어/캡차 통과 화면이 감지되었습니다. 타임아웃을 5분으로 연장합니다.`);
+                // 원격 제어: 캡차 감지 알림(remote.js → 텔레그램)
+                try { window.dispatchEvent(new CustomEvent('toki:captcha')); } catch {}
                 if (timeoutId) {
                     clearTimeout(timeoutId);
                     timeoutId = setTimeout(() => {

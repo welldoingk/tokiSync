@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f1115" />
+    <title>tokiSync 원격 제어</title>
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <div class="wrap">
+        <header>
+            <h1>📡 tokiSync 원격 제어</h1>
+            <div class="status-pills">
+                <span id="pill-online" class="pill off">스크립트 오프라인</span>
+                <span id="pill-running" class="pill">정지</span>
+            </div>
+        </header>
+
+        <div class="panel">
+            <h2>시리즈 URL 추가</h2>
+            <textarea id="urls" placeholder="https://.../comic/12345&#10;https://.../webtoon/67890 (줄바꿈으로 여러 개)"></textarea>
+            <div class="row">
+                <button id="btn-add" class="primary">+ 큐에 추가</button>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>제어</h2>
+            <div class="row">
+                <button id="btn-start" class="blue">▶️ 시작</button>
+                <button id="btn-stop">⏸️ 정지</button>
+                <button id="btn-clear" class="danger">🗑️ 비우기</button>
+            </div>
+            <div id="progress" class="progress"></div>
+        </div>
+
+        <div class="panel">
+            <h2>대기열 (<span id="q-count">0</span>)</h2>
+            <div id="queue" class="queue-list"><div class="empty">로딩 중…</div></div>
+        </div>
+
+        <div class="panel" id="captcha-panel" style="display:none">
+            <h2>⚠️ 캡차 알림</h2>
+            <div id="captcha"></div>
+        </div>
+
+        <div class="panel">
+            <details>
+                <summary>⚙️ 연결 설정</summary>
+                <div class="settings-grid">
+                    <div>
+                        <label>API 서버 주소 (비우면 현재 호스트)</label>
+                        <input type="text" id="set-base" placeholder="http://192.168.0.x:8787" />
+                    </div>
+                    <div>
+                        <label>API 토큰</label>
+                        <input type="password" id="set-token" placeholder="컨트롤 API 토큰" />
+                    </div>
+                    <div>
+                        <label>폴링 주기 (초)</label>
+                        <input type="number" id="set-poll" min="2" max="60" value="3" />
+                    </div>
+                    <div class="row">
+                        <button id="btn-save">저장</button>
+                    </div>
+                    <div class="muted" id="conn-info"></div>
+                </div>
+            </details>
+        </div>
+
+        <div class="muted" id="footer"></div>
+    </div>
+
+    <div id="toast"></div>
+    <script src="app.js"></script>
+</body>
+</html>
