@@ -147,75 +147,75 @@ export function setConfig(key, value) {
  */
 export function showConfigModal() {
     // Remove existing modal if any
-    const existing = document.getElementById('toki-config-modal');
+    const existing = document.getElementById('dsx-config-modal');
     if (existing) existing.remove();
 
     const config = getConfig();
 
     // -- HTML Structure (v1.9.1 Glassmorphism) --
     const overlay = document.createElement('div');
-    overlay.id = 'toki-config-modal';
-    overlay.className = 'toki-modal-overlay';
+    overlay.id = 'dsx-config-modal';
+    overlay.className = 'dsx-modal-overlay';
     
 
     overlay.innerHTML = `
-        <div class="toki-modal toki-modal-main">
-            <div class="toki-modal-header toki-modal-header-borderless">
-                <div class="toki-modal-title toki-text-lg">🛠️ 상세 설정 (Advanced)</div>
+        <div class="dsx-modal dsx-modal-main">
+            <div class="dsx-modal-header dsx-modal-header-borderless">
+                <div class="dsx-modal-title dsx-text-lg">🛠️ 상세 설정 (Advanced)</div>
             </div>
             
-            <div class="toki-section-title toki-mt-0">Cloud & Storage</div>
-            <div class="toki-control-group">
-                <label class="toki-label">GAS Script ID</label>
-                <input type="text" id="toki-cfg-gas-id" class="toki-input" placeholder="AKfycb..." value="${config.gasId}">
+            <div class="dsx-section-title dsx-mt-0">Cloud & Storage</div>
+            <div class="dsx-control-group">
+                <label class="dsx-label">GAS Script ID</label>
+                <input type="text" id="dsx-cfg-gas-id" class="dsx-input" placeholder="AKfycb..." value="${config.gasId}">
             </div>
 
-            <div class="toki-control-group">
-                <label class="toki-label">Google Drive Folder ID</label>
-                <input type="text" id="toki-cfg-folder" class="toki-input" placeholder="Folder ID" value="${config.folderId}">
+            <div class="dsx-control-group">
+                <label class="dsx-label">Google Drive Folder ID</label>
+                <input type="text" id="dsx-cfg-folder" class="dsx-input" placeholder="Folder ID" value="${config.folderId}">
             </div>
 
-            <div class="toki-control-group">
-                <label class="toki-label">API Key (보안)</label>
-                <input type="password" id="toki-cfg-apikey" class="toki-input" placeholder="API Key" value="${config.apiKey}">
+            <div class="dsx-control-group">
+                <label class="dsx-label">API Key (보안)</label>
+                <input type="password" id="dsx-cfg-apikey" class="dsx-input" placeholder="API Key" value="${config.apiKey}">
             </div>
 
-            <div class="toki-section-title">NAS WebDAV (자동 분류 정책)</div>
-            <div class="toki-control-group">
-                <label class="toki-label">WebDAV URL</label>
-                <input type="text" id="toki-cfg-webdav-url" class="toki-input" placeholder="http://192.168.0.50:5005/books" value="${config.webdavUrl}">
+            <div class="dsx-section-title">NAS WebDAV (자동 분류 정책)</div>
+            <div class="dsx-control-group">
+                <label class="dsx-label">WebDAV URL</label>
+                <input type="text" id="dsx-cfg-webdav-url" class="dsx-input" placeholder="http://192.168.0.50:5005/books" value="${config.webdavUrl}">
             </div>
-            <div class="toki-form-grid">
-                <div class="toki-control-group">
-                    <label class="toki-label">WebDAV 계정</label>
-                    <input type="text" id="toki-cfg-webdav-user" class="toki-input" placeholder="user" value="${config.webdavUser}">
+            <div class="dsx-form-grid">
+                <div class="dsx-control-group">
+                    <label class="dsx-label">WebDAV 계정</label>
+                    <input type="text" id="dsx-cfg-webdav-user" class="dsx-input" placeholder="user" value="${config.webdavUser}">
                 </div>
-                <div class="toki-control-group">
-                    <label class="toki-label">WebDAV 비밀번호</label>
-                    <input type="password" id="toki-cfg-webdav-pass" class="toki-input" placeholder="password" value="${config.webdavPass}">
-                </div>
-            </div>
-            <div class="toki-control-group">
-                <label class="toki-label">동시 업로드 수 (1~8, 다운로드는 항상 순차)</label>
-                <input type="number" id="toki-cfg-concurrency" class="toki-input" min="1" max="8" step="1" placeholder="1" value="${config.concurrency}">
-            </div>
-
-            <div class="toki-section-title">다운로드 속도 (밴 위험 주의)</div>
-            <div class="toki-form-grid">
-                <div class="toki-control-group">
-                    <label class="toki-label">이미지 동시 다운로드 (1~16, 기본 8)</label>
-                    <input type="number" id="toki-cfg-img-concurrency" class="toki-input" min="1" max="16" step="1" placeholder="8" value="${config.imgConcurrency}">
-                </div>
-                <div class="toki-control-group">
-                    <label class="toki-label">WAF 지터 기준초 (기본 3 → 3~5초, 낮출수록 빠르지만 밴↑)</label>
-                    <input type="number" id="toki-cfg-waf-jitter" class="toki-input" min="0" max="10" step="0.5" placeholder="3" value="${config.wafJitterSec}">
+                <div class="dsx-control-group">
+                    <label class="dsx-label">WebDAV 비밀번호</label>
+                    <input type="password" id="dsx-cfg-webdav-pass" class="dsx-input" placeholder="password" value="${config.webdavPass}">
                 </div>
             </div>
+            <div class="dsx-control-group">
+                <label class="dsx-label">동시 업로드 수 (1~8, 다운로드는 항상 순차)</label>
+                <input type="number" id="dsx-cfg-concurrency" class="dsx-input" min="1" max="8" step="1" placeholder="1" value="${config.concurrency}">
+            </div>
 
-            <div class="toki-section-title">Global Policies</div>
-            <div class="toki-control-group">
-                <label class="toki-label">다운로드 정책</label>
-                <select id="toki-cfg-policy" class="toki-select">
+            <div class="dsx-section-title">다운로드 속도 (밴 위험 주의)</div>
+            <div class="dsx-form-grid">
+                <div class="dsx-control-group">
+                    <label class="dsx-label">이미지 동시 다운로드 (1~16, 기본 8)</label>
+                    <input type="number" id="dsx-cfg-img-concurrency" class="dsx-input" min="1" max="16" step="1" placeholder="8" value="${config.imgConcurrency}">
+                </div>
+                <div class="dsx-control-group">
+                    <label class="dsx-label">WAF 지터 기준초 (기본 3 → 3~5초, 낮출수록 빠르지만 밴↑)</label>
+                    <input type="number" id="dsx-cfg-waf-jitter" class="dsx-input" min="0" max="10" step="0.5" placeholder="3" value="${config.wafJitterSec}">
+                </div>
+            </div>
+
+            <div class="dsx-section-title">Global Policies</div>
+            <div class="dsx-control-group">
+                <label class="dsx-label">다운로드 정책</label>
+                <select id="dsx-cfg-policy" class="dsx-select">
                     <option value="individual">개별 파일 (Individual)</option>
                     <option value="zipOfCbzs">챕터 묶음 (ZIP of CBZs)</option>
                     <option value="native">자동 분류 (NAS WebDAV)</option>
@@ -223,9 +223,9 @@ export function showConfigModal() {
                 </select>
             </div>
 
-            <div class="toki-control-group">
-                <label class="toki-label">다운로드 속도</label>
-                <select id="toki-cfg-sleepmode" class="toki-select">
+            <div class="dsx-control-group">
+                <label class="dsx-label">다운로드 속도</label>
+                <select id="dsx-cfg-sleepmode" class="dsx-select">
                     <option value="agile">빠름 (1-3초)</option>
                     <option value="cautious">신중 (2-5초)</option>
                     <option value="thorough">철저 (3-8초)</option>
@@ -234,9 +234,9 @@ export function showConfigModal() {
                 </select>
             </div>
 
-            <div class="toki-control-group">
-                <label class="toki-label">Smart Skip 민감도</label>
-                <select id="toki-cfg-smartskip" class="toki-select">
+            <div class="dsx-control-group">
+                <label class="dsx-label">Smart Skip 민감도</label>
+                <select id="dsx-cfg-smartskip" class="dsx-select">
                     <option value="90">90% (매우 민감)</option>
                     <option value="80">80% (민감)</option>
                     <option value="70">70% (보통)</option>
@@ -244,37 +244,37 @@ export function showConfigModal() {
                 </select>
             </div>
             
-            <div class="toki-section-title">Format & Rules</div>
-            <div class="toki-form-grid">
-                <div class="toki-control-group">
-                    <label class="toki-label">소설 포맷</label>
-                    <select id="toki-cfg-novel-format" class="toki-select">
+            <div class="dsx-section-title">Format & Rules</div>
+            <div class="dsx-form-grid">
+                <div class="dsx-control-group">
+                    <label class="dsx-label">소설 포맷</label>
+                    <select id="dsx-cfg-novel-format" class="dsx-select">
                         <option value="epub">EPUB</option>
                         <option value="txt">TXT</option>
                     </select>
                 </div>
-                <div class="toki-control-group">
-                    <label class="toki-label">소설 패키징</label>
-                    <select id="toki-cfg-novel-mode" class="toki-select">
+                <div class="dsx-control-group">
+                    <label class="dsx-label">소설 패키징</label>
+                    <select id="dsx-cfg-novel-mode" class="dsx-select">
                         <option value="perChapter">개별 회차</option>
                         <option value="singleVolume">범위 합본</option>
                     </select>
                 </div>
             </div>
 
-            <div class="toki-control-group">
-                <label class="toki-label">원격 파싱 룰 URL (JSON)</label>
-                <input type="text" id="toki-cfg-remote-rule" class="toki-input" placeholder="https://example.com/rules.json" value="${config.remoteRuleUrl}">
+            <div class="dsx-control-group">
+                <label class="dsx-label">원격 파싱 룰 URL (JSON)</label>
+                <input type="text" id="dsx-cfg-remote-rule" class="dsx-input" placeholder="https://example.com/rules.json" value="${config.remoteRuleUrl}">
             </div>
 
-            <div class="toki-control-group">
-                <label class="toki-label">커스텀 파싱 룰 (JSON Array)</label>
-                <textarea id="toki-cfg-custom-rule" class="toki-textarea toki-textarea-code" placeholder="[{...}]">${config.customRules}</textarea>
+            <div class="dsx-control-group">
+                <label class="dsx-label">커스텀 파싱 룰 (JSON Array)</label>
+                <textarea id="dsx-cfg-custom-rule" class="dsx-textarea dsx-textarea-code" placeholder="[{...}]">${config.customRules}</textarea>
             </div>
 
-            <div class="toki-modal-footer toki-btn-group-row toki-mt-32">
-                <button id="toki-btn-cancel" class="toki-btn-action toki-btn-secondary">취소</button>
-                <button id="toki-btn-save" class="toki-btn-action">설정 저장하기</button>
+            <div class="dsx-modal-footer dsx-btn-group-row dsx-mt-32">
+                <button id="dsx-btn-cancel" class="dsx-btn-action dsx-btn-secondary">취소</button>
+                <button id="dsx-btn-save" class="dsx-btn-action">설정 저장하기</button>
             </div>
         </div>
     `;
@@ -282,44 +282,44 @@ export function showConfigModal() {
     document.body.appendChild(overlay);
 
     // -- Logic --
-    const policySelect = document.getElementById('toki-cfg-policy');
+    const policySelect = document.getElementById('dsx-cfg-policy');
     if(policySelect) policySelect.value = config.policy;
     
-    const sleepModeSelect = document.getElementById('toki-cfg-sleepmode');
+    const sleepModeSelect = document.getElementById('dsx-cfg-sleepmode');
     if(sleepModeSelect) sleepModeSelect.value = config.sleepMode;
 
-    const smartSkipSelect = document.getElementById('toki-cfg-smartskip');
+    const smartSkipSelect = document.getElementById('dsx-cfg-smartskip');
     if(smartSkipSelect) smartSkipSelect.value = config.smartSkipRatio;
 
-    const novelModeSelect = document.getElementById('toki-cfg-novel-mode');
+    const novelModeSelect = document.getElementById('dsx-cfg-novel-mode');
     if(novelModeSelect) novelModeSelect.value = config.novelMode;
 
-    const novelFormatSelect = document.getElementById('toki-cfg-novel-format');
+    const novelFormatSelect = document.getElementById('dsx-cfg-novel-format');
     if(novelFormatSelect) novelFormatSelect.value = config.novelFormat;
 
-    document.getElementById('toki-btn-cancel').onclick = () => overlay.remove();
+    document.getElementById('dsx-btn-cancel').onclick = () => overlay.remove();
     
-    document.getElementById('toki-btn-save').onclick = () => {
-        const newGasId = document.getElementById('toki-cfg-gas-id').value.trim();
-        const newFolder = document.getElementById('toki-cfg-folder').value.trim();
-        const newApiKey = document.getElementById('toki-cfg-apikey').value.trim();
-        const newPolicy = document.getElementById('toki-cfg-policy').value;
-        const newSleepMode = document.getElementById('toki-cfg-sleepmode').value;
-        const newSmartSkip = document.getElementById('toki-cfg-smartskip').value;
-        const newNovelMode = document.getElementById('toki-cfg-novel-mode').value;
-        const newNovelFormat = document.getElementById('toki-cfg-novel-format').value;
-        const newRemoteRule = document.getElementById('toki-cfg-remote-rule').value.trim();
-        const newCustomRule = document.getElementById('toki-cfg-custom-rule').value.trim() || '[]';
-        const newWebdavUrl = document.getElementById('toki-cfg-webdav-url').value.trim();
-        const newWebdavUser = document.getElementById('toki-cfg-webdav-user').value.trim();
-        const newWebdavPass = document.getElementById('toki-cfg-webdav-pass').value;
-        let newConcurrency = parseInt(document.getElementById('toki-cfg-concurrency').value, 10);
+    document.getElementById('dsx-btn-save').onclick = () => {
+        const newGasId = document.getElementById('dsx-cfg-gas-id').value.trim();
+        const newFolder = document.getElementById('dsx-cfg-folder').value.trim();
+        const newApiKey = document.getElementById('dsx-cfg-apikey').value.trim();
+        const newPolicy = document.getElementById('dsx-cfg-policy').value;
+        const newSleepMode = document.getElementById('dsx-cfg-sleepmode').value;
+        const newSmartSkip = document.getElementById('dsx-cfg-smartskip').value;
+        const newNovelMode = document.getElementById('dsx-cfg-novel-mode').value;
+        const newNovelFormat = document.getElementById('dsx-cfg-novel-format').value;
+        const newRemoteRule = document.getElementById('dsx-cfg-remote-rule').value.trim();
+        const newCustomRule = document.getElementById('dsx-cfg-custom-rule').value.trim() || '[]';
+        const newWebdavUrl = document.getElementById('dsx-cfg-webdav-url').value.trim();
+        const newWebdavUser = document.getElementById('dsx-cfg-webdav-user').value.trim();
+        const newWebdavPass = document.getElementById('dsx-cfg-webdav-pass').value;
+        let newConcurrency = parseInt(document.getElementById('dsx-cfg-concurrency').value, 10);
         if (!Number.isFinite(newConcurrency) || newConcurrency < 1) newConcurrency = 1;
         if (newConcurrency > 8) newConcurrency = 8;
-        let newImgConc = parseInt(document.getElementById('toki-cfg-img-concurrency').value, 10);
+        let newImgConc = parseInt(document.getElementById('dsx-cfg-img-concurrency').value, 10);
         if (!Number.isFinite(newImgConc) || newImgConc < 1) newImgConc = 8;
         if (newImgConc > 16) newImgConc = 16;
-        let newWafJitter = parseFloat(document.getElementById('toki-cfg-waf-jitter').value);
+        let newWafJitter = parseFloat(document.getElementById('dsx-cfg-waf-jitter').value);
         if (!Number.isFinite(newWafJitter) || newWafJitter < 0) newWafJitter = 3;
         if (newWafJitter > 10) newWafJitter = 10;
 

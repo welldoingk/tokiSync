@@ -452,7 +452,7 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
         // 목록 페이지 최하단에 배치 + opacity 0.1
         // IntersectionObserver가 정상 동작하며, 브라우저가 일반 문서 흐름으로 렌더링
         const iframe = document.createElement('iframe');
-        iframe.classList.add('toki-visible-block', 'toki-downloader-iframe');
+        iframe.classList.add('dsx-visible-block', 'dsx-downloader-iframe');
         document.body.appendChild(iframe);
 
         // [v1.7.1] Novel Single Volume Mode Init
@@ -727,11 +727,11 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
             }
             
             // [v1.4.0] Add completion badge to list item (real-time feedback)
-            if (item.element && !item.element.querySelector('.toki-badge')) {
+            if (item.element && !item.element.querySelector('.dsx-badge')) {
                 const badge = document.createElement('span');
-                badge.className = 'toki-badge';
+                badge.className = 'dsx-badge';
                 badge.innerText = '✅';
-                // Styles moved to .toki-badge in ui.css
+                // Styles moved to .dsx-badge in ui.css
                 
                 // Target: .wr-subject > a (link element)
                 const linkEl = item.element.querySelector('.wr-subject > a');
@@ -748,7 +748,7 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
                 }
                 
                 // Visual feedback (v1.9.5 consistent styling)
-                item.element.classList.add('toki-downloaded');
+                item.element.classList.add('dsx-downloaded');
             }
         }
 

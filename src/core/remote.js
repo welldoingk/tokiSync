@@ -207,54 +207,54 @@ export function registerRemoteMenu() {
     } catch {}
 }
 
-/** 원격 제어 설정 모달 (toki-modal 스타일 재사용) */
+/** 원격 제어 설정 모달 (dsx-modal 스타일 재사용) */
 export function openRemoteModal() {
-    const existing = document.getElementById('toki-remote-modal');
+    const existing = document.getElementById('dsx-remote-modal');
     if (existing) existing.remove();
 
     const cfg = getRemoteConfig();
     const overlay = document.createElement('div');
-    overlay.id = 'toki-remote-modal';
-    overlay.className = 'toki-modal-overlay';
+    overlay.id = 'dsx-remote-modal';
+    overlay.className = 'dsx-modal-overlay';
     overlay.innerHTML = `
-        <div class="toki-modal toki-modal-main">
-            <div class="toki-modal-header toki-modal-header-borderless">
-                <div class="toki-modal-title toki-text-lg">🌐 원격 제어 설정</div>
+        <div class="dsx-modal dsx-modal-main">
+            <div class="dsx-modal-header dsx-modal-header-borderless">
+                <div class="dsx-modal-title dsx-text-lg">🌐 원격 제어 설정</div>
             </div>
-            <div class="toki-control-group">
-                <label class="toki-label" style="display:flex;align-items:center;gap:8px;">
-                    <input type="checkbox" id="toki-rm-enabled" ${cfg.enabled ? 'checked' : ''}>
+            <div class="dsx-control-group">
+                <label class="dsx-label" style="display:flex;align-items:center;gap:8px;">
+                    <input type="checkbox" id="dsx-rm-enabled" ${cfg.enabled ? 'checked' : ''}>
                     원격 제어 활성화 (컨트롤 API 폴링)
                 </label>
             </div>
-            <div class="toki-control-group">
-                <label class="toki-label">컨트롤 API 주소</label>
-                <input type="text" id="toki-rm-url" class="toki-input" placeholder="http://192.168.0.x:8787" value="${(cfg.url || '').replace(/"/g, '&quot;')}">
+            <div class="dsx-control-group">
+                <label class="dsx-label">컨트롤 API 주소</label>
+                <input type="text" id="dsx-rm-url" class="dsx-input" placeholder="http://192.168.0.x:8787" value="${(cfg.url || '').replace(/"/g, '&quot;')}">
             </div>
-            <div class="toki-control-group">
-                <label class="toki-label">API 토큰</label>
-                <input type="password" id="toki-rm-token" class="toki-input" placeholder="컨트롤 API 토큰" value="${(cfg.token || '').replace(/"/g, '&quot;')}">
+            <div class="dsx-control-group">
+                <label class="dsx-label">API 토큰</label>
+                <input type="password" id="dsx-rm-token" class="dsx-input" placeholder="컨트롤 API 토큰" value="${(cfg.token || '').replace(/"/g, '&quot;')}">
             </div>
-            <div class="toki-control-group">
-                <label class="toki-label">폴링 주기 (초)</label>
-                <input type="number" id="toki-rm-poll" class="toki-input" min="2" max="60" value="${cfg.pollSec}">
+            <div class="dsx-control-group">
+                <label class="dsx-label">폴링 주기 (초)</label>
+                <input type="number" id="dsx-rm-poll" class="dsx-input" min="2" max="60" value="${cfg.pollSec}">
             </div>
-            <div class="toki-modal-footer toki-btn-group-row toki-mt-32">
-                <button id="toki-rm-cancel" class="toki-btn-action toki-btn-secondary">취소</button>
-                <button id="toki-rm-save" class="toki-btn-action">저장 (새로고침)</button>
+            <div class="dsx-modal-footer dsx-btn-group-row dsx-mt-32">
+                <button id="dsx-rm-cancel" class="dsx-btn-action dsx-btn-secondary">취소</button>
+                <button id="dsx-rm-save" class="dsx-btn-action">저장 (새로고침)</button>
             </div>
         </div>`;
     document.body.appendChild(overlay);
 
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-    const cancel = overlay.querySelector('#toki-rm-cancel');
+    const cancel = overlay.querySelector('#dsx-rm-cancel');
     if (cancel) cancel.onclick = () => overlay.remove();
 
-    overlay.querySelector('#toki-rm-save').onclick = () => {
-        _sv(CFG_REMOTE_ENABLED, overlay.querySelector('#toki-rm-enabled').checked ? '1' : '0');
-        _sv(CFG_REMOTE_API_URL, overlay.querySelector('#toki-rm-url').value.trim());
-        _sv(CFG_REMOTE_API_TOKEN, overlay.querySelector('#toki-rm-token').value.trim());
-        _sv(CFG_REMOTE_POLL_SEC, String(parseInt(overlay.querySelector('#toki-rm-poll').value, 10) || 5));
+    overlay.querySelector('#dsx-rm-save').onclick = () => {
+        _sv(CFG_REMOTE_ENABLED, overlay.querySelector('#dsx-rm-enabled').checked ? '1' : '0');
+        _sv(CFG_REMOTE_API_URL, overlay.querySelector('#dsx-rm-url').value.trim());
+        _sv(CFG_REMOTE_API_TOKEN, overlay.querySelector('#dsx-rm-token').value.trim());
+        _sv(CFG_REMOTE_POLL_SEC, String(parseInt(overlay.querySelector('#dsx-rm-poll').value, 10) || 5));
         _sv(K_LAST_SEQ, '-1'); // 설정 변경 시 기준선 재설정
         overlay.remove();
         try { location.reload(); } catch {}

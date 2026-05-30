@@ -333,14 +333,14 @@ function pauseForCaptcha(targetUrl) {
     return new Promise((resumeCallback) => {
         // Create full-screen overlay
         const overlay = document.createElement('div');
-        overlay.id = 'toki-captcha-overlay';
-        overlay.className = 'toki-captcha-overlay';
+        overlay.id = 'dsx-captcha-overlay';
+        overlay.className = 'dsx-captcha-overlay';
         
         overlay.innerHTML = `
-            <h1 class="toki-text-lg toki-captcha-title">⚠️ 캡차 감지</h1>
-            <p class="toki-text-base toki-captcha-desc">아래 프레임에서 캡차를 해결해주세요. (전용 프레임 모드)</p>
-            <div class="toki-captcha-frame" id="toki-captcha-frame-container"></div>
-            <button id="toki-resume-btn" class="toki-btn-action toki-btn-gradient-green toki-btn-resume">
+            <h1 class="dsx-text-lg dsx-captcha-title">⚠️ 캡차 감지</h1>
+            <p class="dsx-text-base dsx-captcha-desc">아래 프레임에서 캡차를 해결해주세요. (전용 프레임 모드)</p>
+            <div class="dsx-captcha-frame" id="dsx-captcha-frame-container"></div>
+            <button id="dsx-resume-btn" class="dsx-btn-action dsx-btn-gradient-green dsx-btn-resume">
                 해결 후 재개하기
             </button>
         `;
@@ -349,10 +349,10 @@ function pauseForCaptcha(targetUrl) {
         
         // 캡차 조작 전용 신규 프레임 띄우기 (다운로드용 프레임의 간섭 방지)
         const captchaIframe = document.createElement('iframe');
-        captchaIframe.classList.add('toki-visible-block', 'toki-captcha-iframe');
+        captchaIframe.classList.add('dsx-visible-block', 'dsx-captcha-iframe');
         captchaIframe.src = targetUrl;
         
-        const container = document.getElementById('toki-captcha-frame-container');
+        const container = document.getElementById('dsx-captcha-frame-container');
         if (container) {
             container.appendChild(captchaIframe);
         }
@@ -405,7 +405,7 @@ function pauseForCaptcha(targetUrl) {
         }, 1000); // Check every 1 second
         
         // Resume button (manual override)
-        document.getElementById('toki-resume-btn').onclick = () => {
+        document.getElementById('dsx-resume-btn').onclick = () => {
             clearInterval(checkInterval);
             overlay.remove();
             resumeCallback();

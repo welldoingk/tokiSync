@@ -36,7 +36,7 @@ export function startSilentAudio() {
         
         if (!audioEl) {
             audioEl = document.createElement('audio');
-            audioEl.classList.add('toki-hidden');
+            audioEl.classList.add('dsx-hidden');
             document.body.appendChild(audioEl);
         }
         

@@ -1,39 +1,39 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
 :root {
-    --toki-primary: #2563eb;
-    --toki-primary-dark: #1d4ed8;
-    --toki-accent: #facc15;
-    --toki-bg: rgba(248, 250, 252, 0.9);
-    --toki-text: #1e293b;
-    --toki-text-muted: #64748b;
-    --toki-border: rgba(255, 255, 255, 0.6);
-    --toki-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-    --toki-font: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --dsx-primary: #2563eb;
+    --dsx-primary-dark: #1d4ed8;
+    --dsx-accent: #facc15;
+    --dsx-bg: rgba(248, 250, 252, 0.9);
+    --dsx-text: #1e293b;
+    --dsx-text-muted: #64748b;
+    --dsx-border: rgba(255, 255, 255, 0.6);
+    --dsx-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+    --dsx-font: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
 /* LogBox Styles */
-#toki-logbox {
+#dsx-logbox {
     position: fixed;
     bottom: 100px;
     right: 30px;
     width: 480px;
     height: 350px;
-    background: var(--toki-bg);
-    color: var(--toki-text);
+    background: var(--dsx-bg);
+    color: var(--dsx-text);
     font-family: 'Cascadia Code', Consolas, monospace;
     font-size: 12px;
-    border: 1px solid var(--toki-border);
+    border: 1px solid var(--dsx-border);
     border-radius: 16px;
     z-index: 9999;
     display: none;
     flex-direction: column;
-    box-shadow: var(--toki-shadow);
+    box-shadow: var(--dsx-shadow);
     backdrop-filter: blur(20px);
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-#toki-logbox-header {
+#dsx-logbox-header {
     padding: 12px 16px;
     background: rgba(255, 255, 255, 0.4);
     border-bottom: 1px solid rgba(0, 0, 0, 0.05);
@@ -45,27 +45,27 @@
     cursor: move;
 }
 
-#toki-logbox-title {
+#dsx-logbox-title {
     font-weight: 700;
     font-size: 13px;
     letter-spacing: -0.01em;
 }
 
-#toki-logbox-controls span {
+#dsx-logbox-controls span {
     cursor: pointer;
     margin-left: 12px;
-    color: var(--toki-text-muted);
+    color: var(--dsx-text-muted);
     font-size: 14px;
     transition: transform 0.2s, color 0.2s;
     display: inline-block;
 }
 
-#toki-logbox-controls span:hover {
-    color: var(--toki-primary);
+#dsx-logbox-controls span:hover {
+    color: var(--dsx-primary);
     transform: scale(1.15);
 }
 
-#toki-logbox-content {
+#dsx-logbox-content {
     flex: 1;
     overflow-y: auto;
     padding: 12px;
@@ -73,7 +73,7 @@
     list-style: none;
 }
 
-#toki-logbox-content li {
+#dsx-logbox-content li {
     margin-bottom: 4px;
     word-break: break-all;
     padding: 4px 8px;
@@ -81,19 +81,19 @@
     line-height: 1.4;
 }
 
-#toki-logbox-content li.critical {
+#dsx-logbox-content li.critical {
     color: #be123c;
     font-weight: 700;
     background: rgba(225, 29, 72, 0.1);
     border-left: 3px solid #e11d48;
 }
 
-#toki-logbox-content li.error { color: #e11d48; }
-#toki-logbox-content li.warn { color: #d97706; }
-#toki-logbox-content li.success { color: #059669; font-weight: 600; }
+#dsx-logbox-content li.error { color: #e11d48; }
+#dsx-logbox-content li.warn { color: #d97706; }
+#dsx-logbox-content li.success { color: #059669; font-weight: 600; }
 
 /* Modal Styles */
-.toki-modal-overlay {
+.dsx-modal-overlay {
     position: fixed;
     top: 0;
     left: 0;
@@ -109,24 +109,24 @@
     animation: tokiFadeIn 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
 }
 
-.toki-modal {
+.dsx-modal {
     width: 520px;
     max-width: 95%;
-    background: var(--toki-bg);
-    border: 1px solid var(--toki-border);
+    background: var(--dsx-bg);
+    border: 1px solid var(--dsx-border);
     border-radius: 28px;
-    box-shadow: var(--toki-shadow);
+    box-shadow: var(--dsx-shadow);
     overflow: hidden;
     display: flex;
     flex-direction: column;
     transform: translateY(30px) scale(0.95);
     animation: tokiSlideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     backdrop-filter: blur(30px);
-    color: var(--toki-text);
-    font-family: var(--toki-font);
+    color: var(--dsx-text);
+    font-family: var(--dsx-font);
 }
 
-.toki-modal-header {
+.dsx-modal-header {
     padding: 24px 32px;
     background: rgba(255, 255, 255, 0.4);
     border-bottom: 1px solid rgba(0, 0, 0, 0.05);
@@ -135,7 +135,7 @@
     align-items: center;
 }
 
-.toki-modal-title {
+.dsx-modal-title {
     font-size: 24px;
     font-weight: 800;
     color: #0f172a;
@@ -145,10 +145,10 @@
     letter-spacing: -0.03em;
 }
 
-.toki-modal-close {
+.dsx-modal-close {
     background: rgba(0, 0, 0, 0.05);
     border: none;
-    color: var(--toki-text-muted);
+    color: var(--dsx-text-muted);
     width: 36px;
     height: 36px;
     border-radius: 50%;
@@ -160,16 +160,16 @@
     font-size: 20px;
 }
 
-.toki-modal-close:hover {
+.dsx-modal-close:hover {
     background: #ef4444;
     color: #fff;
     transform: rotate(90deg);
 }
 
-.toki-btn-ghost {
+.dsx-btn-ghost {
     background: rgba(0, 0, 0, 0.05);
     border: none;
-    color: var(--toki-text-muted);
+    color: var(--dsx-text-muted);
     padding: 6px 14px;
     border-radius: 12px;
     cursor: pointer;
@@ -182,13 +182,13 @@
     gap: 6px;
 }
 
-.toki-btn-ghost:hover {
+.dsx-btn-ghost:hover {
     background: rgba(0, 0, 0, 0.08);
-    color: var(--toki-text);
+    color: var(--dsx-text);
 }
 
 /* Tabs */
-.toki-tabs {
+.dsx-tabs {
     display: flex;
     background: rgba(255, 255, 255, 0.3);
     padding: 8px;
@@ -196,12 +196,12 @@
     border-bottom: 1px solid rgba(0, 0, 0, 0.05);
 }
 
-.toki-tab-btn {
+.dsx-tab-btn {
     flex: 1;
     padding: 12px;
     background: none;
     border: none;
-    color: var(--toki-text-muted);
+    color: var(--dsx-text-muted);
     font-size: 14px;
     font-weight: 700;
     cursor: pointer;
@@ -213,57 +213,57 @@
     gap: 8px;
 }
 
-.toki-tab-btn:hover {
-    color: var(--toki-text);
+.dsx-tab-btn:hover {
+    color: var(--dsx-text);
     background: rgba(255, 255, 255, 0.6);
 }
 
-.toki-tab-btn.active {
+.dsx-tab-btn.active {
     background: #fff;
-    color: var(--toki-primary);
+    color: var(--dsx-primary);
     box-shadow: 0 4px 12px rgba(37, 99, 235, 0.15);
 }
 
-.toki-tab-content {
+.dsx-tab-content {
     display: none;
     padding: 32px;
     animation: tokiTabFadeIn 0.4s ease-out;
 }
 
-.toki-tab-content.active { display: block; }
+.dsx-tab-content.active { display: block; }
 
 /* Components */
-.toki-section-title {
+.dsx-section-title {
     font-size: 11px;
     font-weight: 800;
-    color: var(--toki-primary);
+    color: var(--dsx-primary);
     text-transform: uppercase;
     letter-spacing: 0.1em;
     margin: 24px 0 12px 4px;
     opacity: 0.8;
 }
 
-.toki-control-group {
+.dsx-control-group {
     margin-bottom: 20px;
     position: relative;
 }
 
-.toki-label {
+.dsx-label {
     display: block;
     font-size: 13px;
     font-weight: 700;
-    color: var(--toki-text-muted);
+    color: var(--dsx-text-muted);
     margin-bottom: 8px;
     margin-left: 4px;
 }
 
-.toki-input, .toki-select, .toki-textarea {
+.dsx-input, .dsx-select, .dsx-textarea {
     width: 100%;
     padding: 14px 18px;
     background: rgba(255, 255, 255, 0.8);
     border: 1px solid rgba(0, 0, 0, 0.08);
     border-radius: 16px;
-    color: var(--toki-text) !important;
+    color: var(--dsx-text) !important;
     font-size: 15px;
     font-weight: 600;
     appearance: none;
@@ -271,25 +271,25 @@
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
 }
 
-.toki-input:hover, .toki-select:hover, .toki-textarea:hover {
-    border-color: var(--toki-primary);
+.dsx-input:hover, .dsx-select:hover, .dsx-textarea:hover {
+    border-color: var(--dsx-primary);
     background-color: #fff;
     box-shadow: 0 4px 12px rgba(37, 99, 235, 0.08);
 }
 
-.toki-input:focus, .toki-select:focus, .toki-textarea:focus {
+.dsx-input:focus, .dsx-select:focus, .dsx-textarea:focus {
     outline: none;
-    border-color: var(--toki-primary);
+    border-color: var(--dsx-primary);
     box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.1);
     background-color: #fff;
 }
 
-.toki-textarea {
+.dsx-textarea {
     resize: vertical;
     line-height: 1.5;
 }
 
-.toki-select {
+.dsx-select {
     cursor: pointer;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2364748b'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
     background-repeat: no-repeat;
@@ -297,10 +297,10 @@
     background-size: 16px;
 }
 
-.toki-btn-action {
+.dsx-btn-action {
     width: 100%;
     height: 56px;
-    background: var(--toki-primary);
+    background: var(--dsx-primary);
     color: #fff !important;
     border: none;
     border-radius: 18px;
@@ -315,26 +315,26 @@
     box-shadow: 0 8px 15px rgba(37, 99, 235, 0.2);
 }
 
-.toki-btn-action:hover {
+.dsx-btn-action:hover {
     transform: translateY(-3px);
     box-shadow: 0 12px 20px rgba(37, 99, 235, 0.35);
     filter: brightness(1.05);
 }
 
-.toki-btn-secondary {
+.dsx-btn-secondary {
     background: rgba(255, 255, 255, 0.8);
     color: #475569 !important;
     border: 1px solid rgba(0, 0, 0, 0.05);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
-.toki-btn-secondary:hover {
+.dsx-btn-secondary:hover {
     background: #fff;
-    color: var(--toki-text) !important;
+    color: var(--dsx-text) !important;
 }
 
 /* Status & Indicators */
-.toki-status-dot {
+.dsx-status-dot {
     width: 8px;
     height: 8px;
     border-radius: 50%;
@@ -342,25 +342,25 @@
     margin-right: 6px;
 }
 
-.toki-status-online {
+.dsx-status-online {
     background: #10b981;
     box-shadow: 0 0 8px #10b981;
 }
 
-.toki-downloaded {
+.dsx-downloaded {
     background: rgba(16, 185, 129, 0.08) !important;
     border-left: 4px solid #10b981 !important;
     opacity: 0.75;
     transition: all 0.3s ease;
 }
 
-.toki-downloaded:hover {
+.dsx-downloaded:hover {
     opacity: 1;
     background: rgba(16, 185, 129, 0.15) !important;
 }
 
 /* FAB */
-.toki-fab {
+.dsx-fab {
     position: fixed;
     bottom: 30px;
     right: 30px;
@@ -377,24 +377,24 @@
     z-index: 9998;
 }
 
-.toki-fab:hover {
+.dsx-fab:hover {
     transform: translateY(-5px) rotate(5deg);
     box-shadow: 0 20px 25px -5px rgba(37, 99, 235, 0.5);
 }
 
-.toki-fab svg {
+.dsx-fab svg {
     width: 28px;
     height: 28px;
     fill: #fff;
 }
 
 /* Tree Editor */
-.toki-tree-modal {
+.dsx-tree-modal {
     width: 1100px !important;
     height: 85vh !important;
 }
 
-.toki-tree-container {
+.dsx-tree-container {
     display: flex;
     flex: 1;
     overflow: hidden;
@@ -403,7 +403,7 @@
     background: rgba(255, 255, 255, 0.2);
 }
 
-.toki-tree-view {
+.dsx-tree-view {
     flex: 1.5;
     overflow-y: auto;
     background: rgba(255, 255, 255, 0.5);
@@ -414,14 +414,14 @@
     font-size: 13px;
 }
 
-.toki-tree-node {
+.dsx-tree-node {
     margin-left: 20px;
     position: relative;
     border-left: 1px dashed rgba(0, 0, 0, 0.1);
     padding-left: 12px;
 }
 
-.toki-tree-item {
+.dsx-tree-item {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -430,18 +430,18 @@
     transition: all 0.2s;
 }
 
-.toki-tree-item:hover {
+.dsx-tree-item:hover {
     background: rgba(37, 99, 235, 0.05);
 }
 
-.toki-tree-key {
+.dsx-tree-key {
     color: #2563eb;
     font-weight: 700;
     cursor: pointer;
     min-width: 90px;
 }
 
-.toki-tree-val {
+.dsx-tree-val {
     color: #1e293b;
     background: transparent;
     border: none;
@@ -449,13 +449,13 @@
     width: 100%;
 }
 
-.toki-tree-val:focus {
+.dsx-tree-val:focus {
     border-bottom-color: #2563eb;
     outline: none;
     background: rgba(37, 99, 235, 0.05);
 }
 
-.toki-tree-toggle {
+.dsx-tree-toggle {
     cursor: pointer;
     user-select: none;
     width: 18px;
@@ -464,11 +464,11 @@
     font-weight: 700;
 }
 
-.toki-tree-toggle:hover {
-    color: var(--toki-primary);
+.dsx-tree-toggle:hover {
+    color: var(--dsx-primary);
 }
 
-.toki-tree-right-panel {
+.dsx-tree-right-panel {
     flex: 1;
     display: flex;
     flex-direction: column;
@@ -478,7 +478,7 @@
     border-radius: 16px;
 }
 
-.toki-tree-json-preview {
+.dsx-tree-json-preview {
     flex: 1;
     background: #0f172a;
     color: #e2e8f0;
@@ -490,7 +490,7 @@
     resize: none;
 }
 
-.toki-btn-rule {
+.dsx-btn-rule {
     background: transparent;
     border: 1px solid #ddd;
     padding: 6px 12px;
@@ -500,7 +500,7 @@
     transition: all 0.2s;
 }
 
-.toki-btn-rule:hover {
+.dsx-btn-rule:hover {
     background: #f8fafc;
     border-color: #94a3b8;
 }
@@ -524,137 +524,137 @@
 /* --- Structural Layouts for Inline Replacement --- */
 
 /* Horizontal Button Row (e.g., Download buttons) */
-.toki-btn-group-row {
+.dsx-btn-group-row {
     display: flex;
     gap: 12px;
     align-items: center;
 }
-.toki-btn-group-row .toki-btn-action {
+.dsx-btn-group-row .dsx-btn-action {
     height: 52px;
     flex: 1;
 }
-.toki-btn-group-row .toki-flex-1-4 {
+.dsx-btn-group-row .dsx-flex-1-4 {
     flex: 1.4;
 }
 
 /* Vertical Button Stack (e.g., Tool buttons) */
-.toki-btn-group-stack {
+.dsx-btn-group-stack {
     display: flex;
     flex-direction: column;
     gap: 8px;
 }
-.toki-btn-group-stack .toki-btn-action {
+.dsx-btn-group-stack .dsx-btn-action {
     height: 44px;
     justify-content: flex-start;
     padding-left: 20px;
 }
 
 /* 2-Column Form Grid */
-.toki-form-grid {
+.dsx-form-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 16px;
 }
 
 /* Utility Shortcuts */
-.toki-flex-between { display: flex; justify-content: space-between; align-items: center; }
-.toki-divider { border: 0; border-top: 1px solid rgba(0,0,0,0.05); margin: 24px 0; }
-.toki-mt-0 { margin-top: 0 !important; }
-.toki-mt-8 { margin-top: 8px !important; }
-.toki-mt-32 { margin-top: 32px !important; }
-.toki-ml-4 { margin-left: 4px !important; }
-.toki-mb-5 { margin-bottom: 5px !important; }
-.toki-mb-10 { margin-bottom: 10px !important; }
-.toki-mb-24 { margin-bottom: 24px !important; }
-.toki-flex-1 { flex: 1; }
-.toki-flex-row { display: flex; gap: 4px; align-items: center; }
-.toki-flex-row-8 { display: flex; gap: 8px; align-items: center; }
-.toki-flex-row-10 { display: flex; gap: 10px; align-items: center; }
+.dsx-flex-between { display: flex; justify-content: space-between; align-items: center; }
+.dsx-divider { border: 0; border-top: 1px solid rgba(0,0,0,0.05); margin: 24px 0; }
+.dsx-mt-0 { margin-top: 0 !important; }
+.dsx-mt-8 { margin-top: 8px !important; }
+.dsx-mt-32 { margin-top: 32px !important; }
+.dsx-ml-4 { margin-left: 4px !important; }
+.dsx-mb-5 { margin-bottom: 5px !important; }
+.dsx-mb-10 { margin-bottom: 10px !important; }
+.dsx-mb-24 { margin-bottom: 24px !important; }
+.dsx-flex-1 { flex: 1; }
+.dsx-flex-row { display: flex; gap: 4px; align-items: center; }
+.dsx-flex-row-8 { display: flex; gap: 8px; align-items: center; }
+.dsx-flex-row-10 { display: flex; gap: 10px; align-items: center; }
 
 /* Text Utilities */
-.toki-text-xs { font-size: 11px; color: #94a3b8; }
-.toki-text-sm { font-size: 12px; }
-.toki-text-base { font-size: 14px; }
-.toki-text-lg { font-size: 20px; font-weight: 700; }
-.toki-text-success { color: #4ade80 !important; }
-.toki-text-danger { color: #ff5555 !important; }
-.toki-text-primary { color: var(--toki-primary) !important; }
-.toki-text-center { text-align: center; }
-.toki-line-16 { line-height: 1.6; }
+.dsx-text-xs { font-size: 11px; color: #94a3b8; }
+.dsx-text-sm { font-size: 12px; }
+.dsx-text-base { font-size: 14px; }
+.dsx-text-lg { font-size: 20px; font-weight: 700; }
+.dsx-text-success { color: #4ade80 !important; }
+.dsx-text-danger { color: #ff5555 !important; }
+.dsx-text-primary { color: var(--dsx-primary) !important; }
+.dsx-text-center { text-align: center; }
+.dsx-line-16 { line-height: 1.6; }
 
 /* Specialized Components */
-.toki-modal-main { padding: 32px; width: 520px; max-height: 85vh; overflow-y: auto; }
-.toki-btn-gradient-green { 
+.dsx-modal-main { padding: 32px; width: 520px; max-height: 85vh; overflow-y: auto; }
+.dsx-btn-gradient-green { 
     background: linear-gradient(135deg, #10b981, #059669) !important; 
     box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2) !important;
 }
-.toki-btn-indigo { background: #6366f1 !important; }
-.toki-btn-lavender { background: #6a5acd !important; font-weight: bold !important; }
-.toki-btn-slate { background: rgba(0,0,0,0.02) !important; border-style: dashed !important; border-radius: 20px !important; }
-.toki-hidden { display: none !important; }
+.dsx-btn-indigo { background: #6366f1 !important; }
+.dsx-btn-lavender { background: #6a5acd !important; font-weight: bold !important; }
+.dsx-btn-slate { background: rgba(0,0,0,0.02) !important; border-style: dashed !important; border-radius: 20px !important; }
+.dsx-hidden { display: none !important; }
 
 /* Helper Boxes */
-.toki-helper-box-blue {
+.dsx-helper-box-blue {
     margin: -10px 0 20px 0; padding: 14px; 
     background: rgba(37, 99, 235, 0.05); border: 1px solid rgba(37, 99, 235, 0.1); 
     border-radius: 18px;
 }
 
 /* Captcha Overlay */
-.toki-captcha-overlay {
+.dsx-captcha-overlay {
     position: fixed; top: 0; left: 0; width: 100%; height: 100%;
     background: rgba(0,0,0,0.8); z-index: 10001;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    color: white; font-family: var(--toki-font);
+    color: white; font-family: var(--dsx-font);
 }
-.toki-captcha-frame {
+.dsx-captcha-frame {
     width: 80%; height: 60%; background: white; 
     border-radius: 20px; overflow: hidden; 
     margin-bottom: 20px; box-shadow: 0 20px 50px rgba(0,0,0,0.5);
 }
 
 /* Component: Helper Description Text */
-.toki-helper-desc { line-height: 1.5; font-weight: 500; }
+.dsx-helper-desc { line-height: 1.5; font-weight: 500; }
 
 /* Component: Small Button (e.g., Test Native) */
-.toki-btn-sm { height: 36px !important; font-size: 12px !important; border-radius: 12px !important; }
+.dsx-btn-sm { height: 36px !important; font-size: 12px !important; border-radius: 12px !important; }
 
 /* Component: Sync Button (height 48px) */
-.toki-btn-sync { height: 48px !important; }
+.dsx-btn-sync { height: 48px !important; }
 
 /* Component: Modal Header without border */
-.toki-modal-header-borderless { border: none !important; }
+.dsx-modal-header-borderless { border: none !important; }
 
 /* Component: Code Textarea */
-.toki-textarea-code { min-height: 120px; font-family: monospace; }
+.dsx-textarea-code { min-height: 120px; font-family: monospace; }
 
 /* Visibility Toggles */
-.toki-visible-flex { display: flex !important; }
-.toki-visible-block { display: block !important; }
-.toki-hidden { display: none !important; }
+.dsx-visible-flex { display: flex !important; }
+.dsx-visible-block { display: block !important; }
+.dsx-hidden { display: none !important; }
 
 /* Status Badges & Indicators */
-.toki-badge {
+.dsx-badge {
     margin-left: 5px;
     font-size: 12px;
     vertical-align: middle;
 }
 
-.toki-downloaded {
+.dsx-downloaded {
     opacity: 0.6;
     background-color: rgba(74, 222, 128, 0.05) !important;
     transition: opacity 0.3s ease;
 }
-.toki-downloaded:hover {
+.dsx-downloaded:hover {
     opacity: 1;
 }
 
-.toki-tree-modal {
+.dsx-tree-modal {
     z-index: 10002 !important;
 }
 
 /* Iframe Elements */
-.toki-downloader-iframe {
+.dsx-downloader-iframe {
     width: 100%;
     height: 600px;
     opacity: 0.1;
@@ -663,14 +663,14 @@
     margin-top: 40px;
 }
 
-.toki-captcha-iframe {
+.dsx-captcha-iframe {
     width: 100%;
     height: 100%;
     border: none;
 }
 
 /* Info Card & History Styles */
-.toki-info-card {
+.dsx-info-card {
     background: rgba(255, 255, 255, 0.4);
     border: 1px solid rgba(0, 0, 0, 0.05);
     border-radius: 12px;
@@ -678,26 +678,26 @@
     margin-bottom: 20px;
 }
 
-.toki-info-row {
+.dsx-info-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
     padding: 6px 0;
 }
 
-.toki-info-row:not(:last-child) {
+.dsx-info-row:not(:last-child) {
     border-bottom: 1px dashed rgba(0, 0, 0, 0.05);
 }
 
-.toki-info-label {
+.dsx-info-label {
     font-size: 13px;
-    color: var(--toki-text-muted);
+    color: var(--dsx-text-muted);
     font-weight: 500;
 }
 
-.toki-info-val {
+.dsx-info-val {
     font-size: 13px;
-    color: var(--toki-text);
+    color: var(--dsx-text);
     font-weight: 700;
     display: flex;
     align-items: center;

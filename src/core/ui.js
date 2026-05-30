@@ -18,7 +18,7 @@ import styles from './ui.css';
 function _tokiModalShell(bodyHtml, opts = {}) {
     return new Promise(resolve => {
         const ov = document.createElement('div');
-        ov.className = 'toki-modal-dialog';
+        ov.className = 'dsx-modal-dialog';
         ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:2147483647;display:flex;align-items:center;justify-content:center;font:14px/1.5 system-ui,sans-serif';
         ov.innerHTML = `<div style="background:#fff;color:#222;padding:18px 22px;border-radius:8px;min-width:320px;max-width:560px;box-shadow:0 8px 40px #0006">${bodyHtml}</div>`;
         document.body.appendChild(ov);
@@ -108,10 +108,10 @@ export class LogBox {
     }
 
     init() {
-        if (document.getElementById('toki-logbox')) return;
+        if (document.getElementById('dsx-logbox')) return;
 
         // -- Styles --
-        const styleId = 'toki-logbox-style';
+        const styleId = 'dsx-logbox-style';
         if (!document.getElementById(styleId)) {
             const style = document.createElement('style');
             style.id = styleId;
@@ -121,37 +121,37 @@ export class LogBox {
 
         // -- HTML --
         this.container = document.createElement('div');
-        this.container.id = 'toki-logbox';
+        this.container.id = 'dsx-logbox';
         this.container.innerHTML = `
-            <div id="toki-logbox-header">
-                <span id="toki-logbox-title">TokiSync Log</span>
-                <div id="toki-logbox-controls">
-                    <span id="toki-btn-report" title="버그 리포트 복사" class="toki-cursor-pointer toki-text-warning">📋</span>
-                    <span id="toki-btn-audio" title="백그라운드 모드" class="toki-cursor-pointer">🔊</span>
-                    <span id="toki-btn-clear" title="Clear">🚫</span>
-                    <span id="toki-btn-close" title="Hide">❌</span>
+            <div id="dsx-logbox-header">
+                <span id="dsx-logbox-title">TokiSync Log</span>
+                <div id="dsx-logbox-controls">
+                    <span id="dsx-btn-report" title="버그 리포트 복사" class="dsx-cursor-pointer dsx-text-warning">📋</span>
+                    <span id="dsx-btn-audio" title="백그라운드 모드" class="dsx-cursor-pointer">🔊</span>
+                    <span id="dsx-btn-clear" title="Clear">🚫</span>
+                    <span id="dsx-btn-close" title="Hide">❌</span>
                 </div>
             </div>
-            <ul id="toki-logbox-content"></ul>
+            <ul id="dsx-logbox-content"></ul>
         `;
         document.body.appendChild(this.container);
 
         // -- Events --
-        this.list = this.container.querySelector('#toki-logbox-content');
+        this.list = this.container.querySelector('#dsx-logbox-content');
         
-        document.getElementById('toki-btn-report').onclick = () => this.exportReport();
-        document.getElementById('toki-btn-clear').onclick = () => this.clear();
-        document.getElementById('toki-btn-close').onclick = () => this.hide();
+        document.getElementById('dsx-btn-report').onclick = () => this.exportReport();
+        document.getElementById('dsx-btn-clear').onclick = () => this.clear();
+        document.getElementById('dsx-btn-close').onclick = () => this.hide();
 
         // ESC Key Support for LogBox
         window.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && this.container.classList.contains('toki-visible-flex')) {
+            if (e.key === 'Escape' && this.container.classList.contains('dsx-visible-flex')) {
                 this.hide();
             }
         });
         
         // Anti-Sleep Button
-        const audioBtn = document.getElementById('toki-btn-audio');
+        const audioBtn = document.getElementById('dsx-btn-audio');
         if (audioBtn) {
             audioBtn.onclick = () => {
                 try {
@@ -238,11 +238,11 @@ export class LogBox {
     }
 
     show() {
-        if (this.container) this.container.classList.add('toki-visible-flex');
+        if (this.container) this.container.classList.add('dsx-visible-flex');
     }
 
     hide() {
-        if (this.container) this.container.classList.remove('toki-visible-flex');
+        if (this.container) this.container.classList.remove('dsx-visible-flex');
     }
 
     async exportReport() {
@@ -329,7 +329,7 @@ ${fmt(info)}
 
     toggle() {
         if (!this.container) return;
-        if (!this.container.classList.contains('toki-visible-flex')) {
+        if (!this.container.classList.contains('dsx-visible-flex')) {
             this.show();
         } else {
             this.hide();
@@ -376,7 +376,7 @@ export class MenuModal {
     }
 
     init() {
-        if (document.getElementById('toki-menu-fab')) return;
+        if (document.getElementById('dsx-menu-fab')) return;
         
         // 1. Create FAB
         this.createFAB();
@@ -388,7 +388,7 @@ export class MenuModal {
                 this.toggle();
             }
             if (e.key === 'Escape') {
-                const overlay = document.querySelector('.toki-modal-overlay');
+                const overlay = document.querySelector('.dsx-modal-overlay');
                 if (overlay) this.close(overlay);
             }
         });
@@ -396,8 +396,8 @@ export class MenuModal {
 
     createFAB() {
         const fab = document.createElement('div');
-        fab.id = 'toki-menu-fab';
-        fab.className = 'toki-fab';
+        fab.id = 'dsx-menu-fab';
+        fab.className = 'dsx-fab';
         fab.title = 'TokiSync 메뉴 (Ctrl+Shift+T)';
         fab.innerHTML = `<svg viewBox="0 0 24 24"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>`;
         
@@ -412,72 +412,72 @@ export class MenuModal {
         // Better to pass current state or read from GM_getValue directly purely for UI init if needed.
         
         const overlay = document.createElement('div');
-        overlay.className = 'toki-modal-overlay';
+        overlay.className = 'dsx-modal-overlay';
         overlay.onclick = (e) => { if(e.target === overlay) this.close(overlay); };
 
         const modal = document.createElement('div');
-        modal.className = 'toki-modal';
+        modal.className = 'dsx-modal';
         overlay.appendChild(modal);
 
         // -- Header --
         const header = document.createElement('div');
-        header.className = 'toki-modal-header';
+        header.className = 'dsx-modal-header';
         header.innerHTML = `
-            <div class="toki-modal-title"><span>⚡ TokiSync</span></div>
-            <div class="toki-flex-row">
-                <button class="toki-btn-ghost" id="toki-btn-viewer-link" title="Open Viewer">
+            <div class="dsx-modal-title"><span>⚡ TokiSync</span></div>
+            <div class="dsx-flex-row">
+                <button class="dsx-btn-ghost" id="dsx-btn-viewer-link" title="Open Viewer">
                     🌐 <span>Viewer</span>
                 </button>
-                <button class="toki-modal-close" id="toki-btn-menu-close" title="Close">&times;</button>
+                <button class="dsx-modal-close" id="dsx-btn-menu-close" title="Close">&times;</button>
             </div>
         `;
         modal.appendChild(header);
 
         // -- Tabs Header --
         const tabsHeader = document.createElement('div');
-        tabsHeader.className = 'toki-tabs';
+        tabsHeader.className = 'dsx-tabs';
         tabsHeader.innerHTML = `
-            <button class="toki-tab-btn active" data-tab="download">📥 다운로드</button>
-            <button class="toki-tab-btn" data-tab="settings">⚙️ 설정</button>
-            <button class="toki-tab-btn" data-tab="history">📊 기록</button>
-            <button class="toki-tab-btn" data-tab="tools">🛠️ 도구</button>
+            <button class="dsx-tab-btn active" data-tab="download">📥 다운로드</button>
+            <button class="dsx-tab-btn" data-tab="settings">⚙️ 설정</button>
+            <button class="dsx-tab-btn" data-tab="history">📊 기록</button>
+            <button class="dsx-tab-btn" data-tab="tools">🛠️ 도구</button>
         `;
         modal.appendChild(tabsHeader);
 
         // -- Body --
         const body = document.createElement('div');
-        body.className = 'toki-modal-body';
+        body.className = 'dsx-modal-body';
         
         // 1. Download Tab
         const tabDown = document.createElement('div');
-        tabDown.className = 'toki-tab-content active';
-        tabDown.id = 'toki-tab-download';
+        tabDown.className = 'dsx-tab-content active';
+        tabDown.id = 'dsx-tab-download';
         tabDown.innerHTML = `
-                <div class="toki-control-group">
-                    <label class="toki-label">빠른 작업</label>
-                    <button class="toki-btn-action toki-btn-gradient-green" id="toki-btn-down-current">
+                <div class="dsx-control-group">
+                    <label class="dsx-label">빠른 작업</label>
+                    <button class="dsx-btn-action dsx-btn-gradient-green" id="dsx-btn-down-current">
                         <span>🚀 현재 회차 즉시 다운로드</span>
                     </button>
                 </div>
-                <hr class="toki-divider">
-                <div class="toki-control-group">
-                    <label class="toki-label">에피소드 범위 지정</label>
-                    <input type="text" id="toki-range-input" class="toki-input"
+                <hr class="dsx-divider">
+                <div class="dsx-control-group">
+                    <label class="dsx-label">에피소드 범위 지정</label>
+                    <input type="text" id="dsx-range-input" class="dsx-input"
                         placeholder="예: 1,2,4-10,15 (비우면 전체)">
-                    <div class="toki-text-xs toki-mt-8 toki-ml-4">쉼표(,)로 개별 번호, 하이픈(-)으로 연속 범위 지정</div>
+                    <div class="dsx-text-xs dsx-mt-8 dsx-ml-4">쉼표(,)로 개별 번호, 하이픈(-)으로 연속 범위 지정</div>
                 </div>
-                <div class="toki-control-group toki-mb-24">
-                    <label class="toki-checkbox-wrapper">
-                        <input type="checkbox" id="toki-chk-force-overwrite" class="toki-checkbox-input">
-                        <span class="toki-checkbox"></span>
-                        <span class="toki-checkbox-label">⚠️ 강제 재다운로드 (파일 덮어쓰기)</span>
+                <div class="dsx-control-group dsx-mb-24">
+                    <label class="dsx-checkbox-wrapper">
+                        <input type="checkbox" id="dsx-chk-force-overwrite" class="dsx-checkbox-input">
+                        <span class="dsx-checkbox"></span>
+                        <span class="dsx-checkbox-label">⚠️ 강제 재다운로드 (파일 덮어쓰기)</span>
                     </label>
                 </div>
-                <div class="toki-btn-group-row">
-                    <button class="toki-btn-action toki-flex-1-4" id="toki-btn-down-range">
+                <div class="dsx-btn-group-row">
+                    <button class="dsx-btn-action dsx-flex-1-4" id="dsx-btn-down-range">
                         <span>선택 다운로드</span>
                     </button>
-                    <button class="toki-btn-action toki-btn-secondary" id="toki-btn-down-all">
+                    <button class="dsx-btn-action dsx-btn-secondary" id="dsx-btn-down-all">
                         <span>전체</span>
                     </button>
                 </div>
@@ -486,13 +486,13 @@ export class MenuModal {
 
         // 2. Settings Tab (Unified v1.9.1)
         const tabSettings = document.createElement('div');
-        tabSettings.className = 'toki-tab-content';
-        tabSettings.id = 'toki-tab-settings';
+        tabSettings.className = 'dsx-tab-content';
+        tabSettings.id = 'dsx-tab-settings';
         tabSettings.innerHTML = `
-            <div class="toki-section-title toki-mt-0">Download Settings</div>
-            <div class="toki-control-group">
-                <label class="toki-label">저장 정책</label>
-                <select id="toki-sel-policy" class="toki-select">
+            <div class="dsx-section-title dsx-mt-0">Download Settings</div>
+            <div class="dsx-control-group">
+                <label class="dsx-label">저장 정책</label>
+                <select id="dsx-sel-policy" class="dsx-select">
                     <option value="individual">개별 파일</option>
                     <option value="zipOfCbzs">챕터 묶음</option>
                     <option value="native">자동 분류 (NAS)</option>
@@ -500,9 +500,9 @@ export class MenuModal {
                 </select>
             </div>
             
-            <div class="toki-control-group">
-                <label class="toki-label">다운로드 속도</label>
-                <select id="toki-sel-speed" class="toki-select">
+            <div class="dsx-control-group">
+                <label class="dsx-label">다운로드 속도</label>
+                <select id="dsx-sel-speed" class="dsx-select">
                     <option value="agile">빠름</option>
                     <option value="cautious">신중</option>
                     <option value="thorough">철저</option>
@@ -511,27 +511,27 @@ export class MenuModal {
                 </select>
             </div>
 
-            <div id="toki-native-helper" class="toki-hidden toki-helper-box-blue">
-                <div class="toki-text-sm toki-text-primary toki-mb-10 toki-helper-desc">
+            <div id="dsx-native-helper" class="dsx-hidden dsx-helper-box-blue">
+                <div class="dsx-text-sm dsx-text-primary dsx-mb-10 dsx-helper-desc">
                     📡 NAS WebDAV로 직접 업로드합니다. 상세 설정에서 WebDAV URL/계정을 입력하세요.
                 </div>
-                <button class="toki-btn-action toki-btn-secondary toki-btn-sm" id="toki-btn-test-native">
+                <button class="dsx-btn-action dsx-btn-secondary dsx-btn-sm" id="dsx-btn-test-native">
                     📡 WebDAV 연결 테스트
                 </button>
             </div>
 
-            <div class="toki-section-title">Novel Settings</div>
-            <div class="toki-form-grid">
-                <div class="toki-control-group">
-                    <label class="toki-label">소설 포맷</label>
-                    <select id="toki-sel-novel-format" class="toki-select">
+            <div class="dsx-section-title">Novel Settings</div>
+            <div class="dsx-form-grid">
+                <div class="dsx-control-group">
+                    <label class="dsx-label">소설 포맷</label>
+                    <select id="dsx-sel-novel-format" class="dsx-select">
                         <option value="epub">EPUB</option>
                         <option value="txt">TXT</option>
                     </select>
                 </div>
-                <div class="toki-control-group">
-                    <label class="toki-label">Smart Skip</label>
-                    <select id="toki-sel-smartskip" class="toki-select">
+                <div class="dsx-control-group">
+                    <label class="dsx-label">Smart Skip</label>
+                    <select id="dsx-sel-smartskip" class="dsx-select">
                         <option value="90">90% (민감)</option>
                         <option value="70">70% (보통)</option>
                         <option value="50">50% (기본)</option>
@@ -539,16 +539,16 @@ export class MenuModal {
                 </div>
             </div>
 
-            <div class="toki-control-group">
-                <label class="toki-label">소설 패키징</label>
-                <select id="toki-sel-novel-mode" class="toki-select">
+            <div class="dsx-control-group">
+                <label class="dsx-label">소설 패키징</label>
+                <select id="dsx-sel-novel-mode" class="dsx-select">
                     <option value="perChapter">회차별 개별 저장</option>
                     <option value="singleVolume">범위 합본 저장</option>
                 </select>
             </div>
 
-            <div class="toki-section-title">Configuration</div>
-            <button class="toki-btn-action toki-btn-secondary toki-btn-slate" id="toki-btn-advanced">
+            <div class="dsx-section-title">Configuration</div>
+            <button class="dsx-btn-action dsx-btn-secondary dsx-btn-slate" id="dsx-btn-advanced">
                 🛠️ 상세 주소 및 API 키 설정 (Advanced)
             </button>
         `;
@@ -556,25 +556,25 @@ export class MenuModal {
 
         // 3. History Tab (NEW)
         const tabHistory = document.createElement('div');
-        tabHistory.className = 'toki-tab-content';
-        tabHistory.id = 'toki-tab-history';
+        tabHistory.className = 'dsx-tab-content';
+        tabHistory.id = 'dsx-tab-history';
         tabHistory.innerHTML = `
-            <div class="toki-info-card">
-                <div class="toki-info-row">
-                    <span class="toki-info-label">동기화 상태</span>
-                    <span class="toki-info-val"><span class="toki-status-dot toki-status-online"></span>연결됨</span>
+            <div class="dsx-info-card">
+                <div class="dsx-info-row">
+                    <span class="dsx-info-label">동기화 상태</span>
+                    <span class="dsx-info-val"><span class="dsx-status-dot dsx-status-online"></span>연결됨</span>
                 </div>
-                <div class="toki-info-row">
-                    <span class="toki-info-label">마지막 동기화</span>
-                    <span class="toki-info-val" id="toki-txt-last-sync">-</span>
+                <div class="dsx-info-row">
+                    <span class="dsx-info-label">마지막 동기화</span>
+                    <span class="dsx-info-val" id="dsx-txt-last-sync">-</span>
                 </div>
             </div>
-            <div class="toki-control-group">
-                <button class="toki-btn-action toki-btn-sync" id="toki-btn-sync-now">
+            <div class="dsx-control-group">
+                <button class="dsx-btn-action dsx-btn-sync" id="dsx-btn-sync-now">
                     <span>🔄 지금 즉시 동기화</span>
                 </button>
             </div>
-            <p class="toki-text-xs toki-text-center toki-line-16">
+            <p class="dsx-text-xs dsx-text-center dsx-line-16">
                 구글 드라이브의 데이터를 기반으로 목록에 완료 표시(✅)를 업데이트합니다.
             </p>
         `;
@@ -582,28 +582,28 @@ export class MenuModal {
 
         // 4. Tools Tab (Renamed from System)
         const tabTools = document.createElement('div');
-        tabTools.className = 'toki-tab-content';
-        tabTools.id = 'toki-tab-tools';
+        tabTools.className = 'dsx-tab-content';
+        tabTools.id = 'dsx-tab-tools';
         tabTools.innerHTML = `
-                <div class="toki-control-group">
-                    <label class="toki-label">파일 관리</label>
-                    <div class="toki-btn-group-stack">
-                        <button class="toki-btn-action toki-btn-secondary" id="toki-btn-migration">
+                <div class="dsx-control-group">
+                    <label class="dsx-label">파일 관리</label>
+                    <div class="dsx-btn-group-stack">
+                        <button class="dsx-btn-action dsx-btn-secondary" id="dsx-btn-migration">
                             📂 기존 파일명 표준화 (Migration)
                         </button>
-                        <button class="toki-btn-action toki-btn-secondary" id="toki-btn-thumb-optim">
+                        <button class="dsx-btn-action dsx-btn-secondary" id="dsx-btn-thumb-optim">
                             🔄 썸네일 통합 및 캐 최적화
                         </button>
                     </div>
                 </div>
-                <hr class="toki-divider">
-                <div class="toki-control-group">
-                    <label class="toki-label">시스템 도구</label>
-                    <div class="toki-btn-group-stack">
-                        <button class="toki-btn-action toki-btn-secondary" id="toki-btn-log">
+                <hr class="dsx-divider">
+                <div class="dsx-control-group">
+                    <label class="dsx-label">시스템 도구</label>
+                    <div class="dsx-btn-group-stack">
+                        <button class="dsx-btn-action dsx-btn-secondary" id="dsx-btn-log">
                             📝 실시간 로그창 토글
                         </button>
-                        <button class="toki-btn-action toki-btn-indigo" id="toki-btn-tree-editor">
+                        <button class="dsx-btn-action dsx-btn-indigo" id="dsx-btn-tree-editor">
                             🧩 파싱 규칙 편집기 (Tree Editor)
                         </button>
                     </div>
@@ -622,8 +622,8 @@ export class MenuModal {
 
     bindEvents(overlay) {
         // Tab Switching Logic
-        const tabBtns = overlay.querySelectorAll('.toki-tab-btn');
-        const tabContents = overlay.querySelectorAll('.toki-tab-content');
+        const tabBtns = overlay.querySelectorAll('.dsx-tab-btn');
+        const tabContents = overlay.querySelectorAll('.dsx-tab-content');
 
         tabBtns.forEach(btn => {
             btn.onclick = () => {
@@ -633,53 +633,53 @@ export class MenuModal {
                 tabBtns.forEach(b => b.classList.toggle('active', b === btn));
                 // Toggle Contents
                 tabContents.forEach(c => {
-                    c.classList.toggle('active', c.id === `toki-tab-${target}`);
+                    c.classList.toggle('active', c.id === `dsx-tab-${target}`);
                 });
             };
         });
 
         // Headers
-        const closeBtn = document.getElementById('toki-btn-menu-close');
+        const closeBtn = document.getElementById('dsx-btn-menu-close');
         if (closeBtn) closeBtn.onclick = () => this.close(overlay);
         
-        const viewerLink = document.getElementById('toki-btn-viewer-link');
+        const viewerLink = document.getElementById('dsx-btn-viewer-link');
         if (viewerLink) viewerLink.onclick = () => {
              if(this.handlers.openViewer) this.handlers.openViewer();
         };
 
         // 1. Download Tab
-        const downAllBtn = document.getElementById('toki-btn-down-all');
+        const downAllBtn = document.getElementById('dsx-btn-down-all');
         if (downAllBtn) downAllBtn.onclick = () => {
-            const force = document.getElementById('toki-chk-force-overwrite').checked;
+            const force = document.getElementById('dsx-chk-force-overwrite').checked;
             if(this.handlers.downloadAll) this.handlers.downloadAll(force);
             this.close(overlay);
         };
 
-        const downRangeBtn = document.getElementById('toki-btn-down-range');
+        const downRangeBtn = document.getElementById('dsx-btn-down-range');
         if (downRangeBtn) downRangeBtn.onclick = () => {
-            const spec = document.getElementById('toki-range-input').value.trim();
-            const force = document.getElementById('toki-chk-force-overwrite').checked;
+            const spec = document.getElementById('dsx-range-input').value.trim();
+            const force = document.getElementById('dsx-chk-force-overwrite').checked;
             if (this.handlers.downloadRange) {
                 this.handlers.downloadRange(spec || undefined, force);
             }
             this.close(overlay);
         };
 
-        const downCurrentBtn = document.getElementById('toki-btn-down-current');
+        const downCurrentBtn = document.getElementById('dsx-btn-down-current');
         if (downCurrentBtn) downCurrentBtn.onclick = () => {
              if(this.handlers.downloadCurrent) this.handlers.downloadCurrent();
              this.close(overlay);
         };
 
-        const testExtractBtn = document.getElementById('toki-btn-test-extract');
+        const testExtractBtn = document.getElementById('dsx-btn-test-extract');
         if (testExtractBtn) testExtractBtn.onclick = () => {
              if(this.handlers.testExtraction) this.handlers.testExtraction();
         };
 
         // 2. Settings Tab
-        const selPolicy = document.getElementById('toki-sel-policy');
-        const selSpeed = document.getElementById('toki-sel-speed');
-        const selNovelTerm = document.getElementById('toki-sel-novel-mode');
+        const selPolicy = document.getElementById('dsx-sel-policy');
+        const selSpeed = document.getElementById('dsx-sel-speed');
+        const selNovelTerm = document.getElementById('dsx-sel-novel-mode');
 
         // Load Initial Values
         if (this.handlers.getConfig) {
@@ -697,7 +697,7 @@ export class MenuModal {
             this.updateNativeHelper(selPolicy.value);
         }
         
-        const testNativeBtn = document.getElementById('toki-btn-test-native');
+        const testNativeBtn = document.getElementById('dsx-btn-test-native');
         if (testNativeBtn) {
             testNativeBtn.onclick = async () => {
                 if (this.handlers.testNativeDownload) {
@@ -706,17 +706,17 @@ export class MenuModal {
                     const success = await this.handlers.testNativeDownload();
                     if (success) {
                         testNativeBtn.textContent = '✅ 연결 성공 (NAS 확인)';
-                        testNativeBtn.classList.add('toki-text-success');
-                        testNativeBtn.classList.remove('toki-text-danger');
+                        testNativeBtn.classList.add('dsx-text-success');
+                        testNativeBtn.classList.remove('dsx-text-danger');
                     } else {
                         testNativeBtn.textContent = '❌ 연결 실패 (설정 확인)';
-                        testNativeBtn.classList.add('toki-text-danger');
-                        testNativeBtn.classList.remove('toki-text-success');
+                        testNativeBtn.classList.add('dsx-text-danger');
+                        testNativeBtn.classList.remove('dsx-text-success');
                     }
                     setTimeout(() => {
                         testNativeBtn.disabled = false;
                         testNativeBtn.textContent = '📡 WebDAV 연결 테스트';
-                        testNativeBtn.classList.remove('toki-text-success', 'toki-text-danger');
+                        testNativeBtn.classList.remove('dsx-text-success', 'dsx-text-danger');
                     }, 3000);
                 }
             };
@@ -725,14 +725,14 @@ export class MenuModal {
         if (selSpeed) selSpeed.onchange = () => { if(this.handlers.setConfig) this.handlers.setConfig('TOKI_SLEEP_MODE', selSpeed.value); };
         if (selNovelTerm) selNovelTerm.onchange = () => { if(this.handlers.setConfig) this.handlers.setConfig('TOKI_NOVEL_MODE', selNovelTerm.value); };
 
-        const advancedBtn = document.getElementById('toki-btn-advanced');
+        const advancedBtn = document.getElementById('dsx-btn-advanced');
         if (advancedBtn) advancedBtn.onclick = () => {
             if(this.handlers.openSettings) this.handlers.openSettings();
             this.close(overlay); 
         };
 
         // 3. History Tab
-        const syncBtn = document.getElementById('toki-btn-sync-now');
+        const syncBtn = document.getElementById('dsx-btn-sync-now');
         if (syncBtn) {
             syncBtn.onclick = async () => {
                 if (this.handlers.syncHistory) {
@@ -742,31 +742,31 @@ export class MenuModal {
                     syncBtn.disabled = false;
                     syncBtn.innerHTML = '<span>🔄 지금 즉시 동기화</span>';
                     
-                    const timeEl = document.getElementById('toki-txt-last-sync');
+                    const timeEl = document.getElementById('dsx-txt-last-sync');
                     if (timeEl) timeEl.textContent = new Date().toLocaleTimeString();
                 }
             };
         }
 
         // 4. Tools Tab
-        const migrationBtn = document.getElementById('toki-btn-migration');
+        const migrationBtn = document.getElementById('dsx-btn-migration');
         if (migrationBtn) migrationBtn.onclick = () => {
             if(this.handlers.migrateFilenames) this.handlers.migrateFilenames();
             this.close(overlay);
         };
 
-        const thumbBtn = document.getElementById('toki-btn-thumb-optim');
+        const thumbBtn = document.getElementById('dsx-btn-thumb-optim');
         if (thumbBtn) thumbBtn.onclick = () => {
             if(this.handlers.migrateThumbnails) this.handlers.migrateThumbnails();
             this.close(overlay);
         };
 
-        const logBtn = document.getElementById('toki-btn-log');
+        const logBtn = document.getElementById('dsx-btn-log');
         if (logBtn) logBtn.onclick = () => {
             if(this.handlers.toggleLog) this.handlers.toggleLog();
         };
 
-        const treeEditorBtn = document.getElementById('toki-btn-tree-editor');
+        const treeEditorBtn = document.getElementById('dsx-btn-tree-editor');
         if (treeEditorBtn) treeEditorBtn.onclick = () => {
             const editor = new TreeRuleEditor();
             editor.show();
@@ -782,24 +782,24 @@ export class MenuModal {
     close(overlay) {
         if(overlay) {
             // overlay.style.transition = 'opacity 0.2s'; // CSS handles transition
-            overlay.classList.add('toki-hidden');
+            overlay.classList.add('dsx-hidden');
             setTimeout(() => overlay.remove(), 200);
         }
     }
 
     toggle() {
-        const existing = document.querySelector('.toki-modal-overlay');
+        const existing = document.querySelector('.dsx-modal-overlay');
         if (existing) this.close(existing);
         else this.show();
     }
 
     updateNativeHelper(policy) {
-        const helper = document.getElementById('toki-native-helper');
+        const helper = document.getElementById('dsx-native-helper');
         if (helper) {
             if (policy === 'native') {
-                helper.classList.remove('toki-hidden');
+                helper.classList.remove('dsx-hidden');
             } else {
-                helper.classList.add('toki-hidden');
+                helper.classList.add('dsx-hidden');
             }
         }
     }
@@ -846,7 +846,7 @@ export async function markDownloadedItems(historyList) {
 
                 if (isDownloaded) {
                     // Visual Indicator (v1.9.1 Class-based)
-                    element.classList.add('toki-downloaded'); 
+                    element.classList.add('dsx-downloaded'); 
                     markedCount++;
                 }
             }
@@ -886,40 +886,40 @@ export class TreeRuleEditor {
 
     show() {
         this.overlay = document.createElement('div');
-        this.overlay.className = 'toki-modal-overlay';
-        // z-index handled by .toki-tree-modal in ui.css
+        this.overlay.className = 'dsx-modal-overlay';
+        // z-index handled by .dsx-tree-modal in ui.css
         
         this.overlay.innerHTML = `
-            <div class="toki-modal toki-tree-modal">
-                <div class="toki-modal-header">
-                    <div class="toki-modal-title">🧩 파싱 규칙 관리자 (Tree Editor)</div>
-                    <div class="toki-flex-row-8">
-                        <button class="toki-btn-rule" id="tree-btn-export">📤 내보내기</button>
-                        <button class="toki-btn-rule" id="tree-btn-import">📥 가져오기</button>
-                        <button class="toki-modal-close" id="tree-close-btn">&times;</button>
+            <div class="dsx-modal dsx-tree-modal">
+                <div class="dsx-modal-header">
+                    <div class="dsx-modal-title">🧩 파싱 규칙 관리자 (Tree Editor)</div>
+                    <div class="dsx-flex-row-8">
+                        <button class="dsx-btn-rule" id="tree-btn-export">📤 내보내기</button>
+                        <button class="dsx-btn-rule" id="tree-btn-import">📥 가져오기</button>
+                        <button class="dsx-modal-close" id="tree-close-btn">&times;</button>
                     </div>
                 </div>
-                <div class="toki-tree-container">
-                    <div class="toki-tree-view" id="tree-root"></div>
+                <div class="dsx-tree-container">
+                    <div class="dsx-tree-view" id="tree-root"></div>
                     
-                    <div class="toki-tree-right-panel">
-                        <div class="toki-flex-between toki-text-xs">
+                    <div class="dsx-tree-right-panel">
+                        <div class="dsx-flex-between dsx-text-xs">
                             <span>📄 JSON 미리보기</span>
-                            <span id="tree-json-status" class="toki-text-success">✓ Valid</span>
+                            <span id="tree-json-status" class="dsx-text-success">✓ Valid</span>
                         </div>
-                        <textarea class="toki-tree-json-preview" id="tree-json-editor" spellcheck="false"></textarea>
+                        <textarea class="dsx-tree-json-preview" id="tree-json-editor" spellcheck="false"></textarea>
                         
-                        <div class="toki-test-bench toki-mt-0">
-                            <div class="toki-label toki-mb-5">🧪 즉시 테스트</div>
-                            <div class="toki-flex-row-8">
-                                <input type="text" id="tree-test-url" class="toki-input-compact toki-flex-1" placeholder="주소 입력" value="${window.location.href}">
-                                <button class="toki-btn-rule toki-text-success" id="tree-btn-test">실행</button>
+                        <div class="dsx-test-bench dsx-mt-0">
+                            <div class="dsx-label dsx-mb-5">🧪 즉시 테스트</div>
+                            <div class="dsx-flex-row-8">
+                                <input type="text" id="tree-test-url" class="dsx-input-compact dsx-flex-1" placeholder="주소 입력" value="${window.location.href}">
+                                <button class="dsx-btn-rule dsx-text-success" id="tree-btn-test">실행</button>
                             </div>
-                            <div id="tree-test-result" class="toki-test-result">규칙 수정 후 바로 테스트해보세요.</div>
+                            <div id="tree-test-result" class="dsx-test-result">규칙 수정 후 바로 테스트해보세요.</div>
                         </div>
                         
-                        <div class="toki-flex-row-10">
-                            <button class="toki-btn-action toki-btn-lavender" id="tree-btn-save">저장 및 적용</button>
+                        <div class="dsx-flex-row-10">
+                            <button class="dsx-btn-action dsx-btn-lavender" id="tree-btn-save">저장 및 적용</button>
                         </div>
                     </div>
                 </div>
@@ -936,11 +936,11 @@ export class TreeRuleEditor {
         root.innerHTML = '';
         
         const mainNode = document.createElement('div');
-        mainNode.innerHTML = `<div class="toki-tree-item"><span class="toki-tree-key">Rules [Array]</span><button class="toki-tree-btn-small" id="tree-add-rule">➕ 룰 추가</button></div>`;
+        mainNode.innerHTML = `<div class="dsx-tree-item"><span class="dsx-tree-key">Rules [Array]</span><button class="dsx-tree-btn-small" id="tree-add-rule">➕ 룰 추가</button></div>`;
         root.appendChild(mainNode);
 
         const listNode = document.createElement('div');
-        listNode.className = 'toki-tree-node';
+        listNode.className = 'dsx-tree-node';
         this.rules.forEach((rule, idx) => {
             listNode.appendChild(this.renderNode(rule, `[${idx}]`, rule.name || rule.id || `Rule ${idx + 1}`));
         });
@@ -951,18 +951,18 @@ export class TreeRuleEditor {
 
     renderNode(data, path, label = '') {
         const wrapper = document.createElement('div');
-        wrapper.className = 'toki-tree-node-wrapper';
+        wrapper.className = 'dsx-tree-node-wrapper';
 
         const item = document.createElement('div');
-        item.className = 'toki-tree-item';
+        item.className = 'dsx-tree-item';
         
         const isObject = data !== null && typeof data === 'object';
         const toggle = document.createElement('span');
-        toggle.className = 'toki-tree-toggle';
+        toggle.className = 'dsx-tree-toggle';
         toggle.textContent = isObject ? '▼' : '•';
         
         const keySpan = document.createElement('span');
-        keySpan.className = 'toki-tree-key';
+        keySpan.className = 'dsx-tree-key';
         keySpan.textContent = label || path.split('.').pop();
         if (this.hints[keySpan.textContent]) {
             keySpan.title = this.hints[keySpan.textContent];
@@ -973,17 +973,17 @@ export class TreeRuleEditor {
 
         if (!isObject) {
             const input = document.createElement('input');
-            input.className = 'toki-tree-val';
+            input.className = 'dsx-tree-val';
             input.value = data;
             input.dataset.path = path;
             input.oninput = (e) => this.updateValue(path, e.target.value);
             item.appendChild(input);
         } else {
             const actions = document.createElement('div');
-            actions.className = 'toki-tree-actions';
+            actions.className = 'dsx-tree-actions';
             
             const btnDel = document.createElement('button');
-            btnDel.className = 'toki-tree-btn-small';
+            btnDel.className = 'dsx-tree-btn-small';
             btnDel.textContent = '🗑️';
             btnDel.onclick = () => this.removeNode(path);
             actions.appendChild(btnDel);
@@ -995,14 +995,14 @@ export class TreeRuleEditor {
 
         if (isObject) {
             const children = document.createElement('div');
-            children.className = 'toki-tree-node';
+            children.className = 'dsx-tree-node';
             Object.keys(data).forEach(key => {
                 children.appendChild(this.renderNode(data[key], `${path}.${key}`, key));
             });
             wrapper.appendChild(children);
 
             toggle.onclick = () => {
-                children.classList.toggle('toki-hidden');
+                children.classList.toggle('dsx-hidden');
                 toggle.textContent = isHidden ? '▼' : '▶';
             };
         }
@@ -1079,15 +1079,15 @@ export class TreeRuleEditor {
                 if (Array.isArray(parsed)) {
                     this.rules = parsed;
                     status.textContent = '✓ Valid';
-                    status.classList.add('toki-text-success');
-                    status.classList.remove('toki-text-danger');
+                    status.classList.add('dsx-text-success');
+                    status.classList.remove('dsx-text-danger');
                     if (this.renderTimer) clearTimeout(this.renderTimer);
                     this.renderTimer = setTimeout(() => this.render(), 1000);
                 }
             } catch (err) {
                 status.textContent = '⚠ Invalid JSON';
-                status.classList.add('toki-text-danger');
-                status.classList.remove('toki-text-success');
+                status.classList.add('dsx-text-danger');
+                status.classList.remove('dsx-text-success');
             }
         };
 
@@ -1109,30 +1109,30 @@ export class TreeRuleEditor {
 
         overlay.querySelector('#tree-btn-import').onclick = () => {
             const selectOverlay = document.createElement('div');
-            selectOverlay.className = 'toki-modal-overlay';
+            selectOverlay.className = 'dsx-modal-overlay';
             selectOverlay.style.zIndex = '20002'; // Above Tree Editor
             selectOverlay.onclick = (e) => { if(e.target === selectOverlay) selectOverlay.remove(); };
             
             selectOverlay.innerHTML = `
-                <div class="toki-modal toki-compact-modal" style="max-width: 400px; padding: 24px;">
-                    <div class="toki-modal-header" style="margin-bottom: 20px;">
-                        <div class="toki-modal-title" style="font-size: 16px;">📥 규칙 가져오기 방식 선택</div>
-                        <button class="toki-modal-close" id="import-select-close" title="닫기">&times;</button>
+                <div class="dsx-modal dsx-compact-modal" style="max-width: 400px; padding: 24px;">
+                    <div class="dsx-modal-header" style="margin-bottom: 20px;">
+                        <div class="dsx-modal-title" style="font-size: 16px;">📥 규칙 가져오기 방식 선택</div>
+                        <button class="dsx-modal-close" id="import-select-close" title="닫기">&times;</button>
                     </div>
                     <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px;">
-                        <button class="toki-btn-action toki-btn-lavender" id="import-choose-file">
+                        <button class="dsx-btn-action dsx-btn-lavender" id="import-choose-file">
                             📂 로컬 JSON 파일 선택
                         </button>
-                        <button class="toki-btn-action toki-btn-secondary" id="import-choose-url">
+                        <button class="dsx-btn-action dsx-btn-secondary" id="import-choose-url">
                             🌐 원격 URL 주소 입력
                         </button>
                     </div>
-                    <div id="import-url-input-container" class="toki-hidden" style="margin-top: 16px; border-top: 1px solid rgba(255, 255, 255, 0.1); padding-top: 16px;">
-                        <div class="toki-control-group" style="margin-bottom: 16px;">
-                            <label class="toki-label">원격 규칙 URL 주소</label>
-                            <input type="text" id="import-url-input" class="toki-input" placeholder="https://..." value="https://pray4skylark.github.io/tokiSync/rules.json">
+                    <div id="import-url-input-container" class="dsx-hidden" style="margin-top: 16px; border-top: 1px solid rgba(255, 255, 255, 0.1); padding-top: 16px;">
+                        <div class="dsx-control-group" style="margin-bottom: 16px;">
+                            <label class="dsx-label">원격 규칙 URL 주소</label>
+                            <input type="text" id="import-url-input" class="dsx-input" placeholder="https://..." value="https://pray4skylark.github.io/tokiSync/rules.json">
                         </div>
-                        <button class="toki-btn-action" id="import-btn-fetch" style="width: 100%;">
+                        <button class="dsx-btn-action" id="import-btn-fetch" style="width: 100%;">
                             <span>가져오기 실행</span>
                         </button>
                     </div>
@@ -1187,7 +1187,7 @@ export class TreeRuleEditor {
             // URL input toggle
             selectOverlay.querySelector('#import-choose-url').onclick = () => {
                 const container = selectOverlay.querySelector('#import-url-input-container');
-                container.classList.remove('toki-hidden');
+                container.classList.remove('dsx-hidden');
             };
 
             // Fetch remote URL
@@ -1230,7 +1230,7 @@ export class TreeRuleEditor {
                 const result = await extractEpisodeData(document, parser, { site: 'test', category: rule.category }, false);
                 
                 res.innerHTML = `
-                    <div class="toki-text-success">성공!</div>
+                    <div class="dsx-text-success">성공!</div>
                     <div>• 제목: ${result.title || 'N/A'}</div>
                     <div>• 항목 수: ${result.urls?.length || (result.content ? '1 (Text)' : '0')}</div>
                 `;
@@ -1246,10 +1246,10 @@ export class TreeRuleEditor {
  * GenericParser/워커와 동일한 알고리즘: imageContainer → imageItem → exclude(closest) → dummy 필터
  */
 export async function showRuleDebugModal() {
-    document.querySelectorAll('.toki-rule-debug-overlay').forEach(el => el.remove());
+    document.querySelectorAll('.dsx-rule-debug-overlay').forEach(el => el.remove());
 
     const overlay = document.createElement('div');
-    overlay.className = 'toki-rule-debug-overlay';
+    overlay.className = 'dsx-rule-debug-overlay';
     overlay.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:2147483646;pointer-events:none;font:13px/1.5 system-ui,sans-serif;`;
     const initLeft = Math.max(20, (window.innerWidth - Math.min(1100, window.innerWidth * 0.92)) / 2);
     const initTop = Math.max(20, (window.innerHeight - window.innerHeight * 0.88) / 2);

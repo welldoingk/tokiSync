@@ -231,15 +231,15 @@ async function fetchMediaViaPopupSingleAttempt(episodeUrl, targetType = 'novel',
                 try {
                     activePopupRef.location.replace(episodeUrl);
                     // Force-bind name to prevent browser security cleanups
-                    activePopupRef.name = 'tokisync-novel-worker';
+                    activePopupRef.name = 'mv-worker';
                 } catch (replaceErr) {
                     console.warn('[Controller] location.replace 보안 차단 발생, href 폴백 전환:', replaceErr);
                     activePopupRef.location.href = episodeUrl;
-                    activePopupRef.name = 'tokisync-novel-worker';
+                    activePopupRef.name = 'mv-worker';
                 }
             } else {
                 console.log('[Controller] 신규 수집용 팝업 생성:', episodeUrl);
-                activePopupRef = window.open(episodeUrl, 'tokisync-novel-worker', 'width=50,height=400,left=0,top=0,noopener=false');
+                activePopupRef = window.open(episodeUrl, 'mv-worker', 'width=50,height=400,left=0,top=0,noopener=false');
                 if (!activePopupRef) {
                     throw new Error('브라우저에 의해 팝업 차단이 감지되었습니다.');
                 }

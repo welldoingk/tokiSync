@@ -15,7 +15,7 @@ import { scrollToLoad, fetchBlobWithXHR, blobToArrayBuffer, waitForContent, slee
         error: console.error
     };
     
-    const ctxMarker = (window.name === 'tokisync-novel-worker' || (window.opener && window.name === '')) ? '[Worker]' : '[Parent]';
+    const ctxMarker = (window.name === 'mv-worker' || (window.opener && window.name === '')) ? '[Worker]' : '[Parent]';
 
     function saveLogToStorage(level, args) {
         try {
@@ -30,9 +30,10 @@ import { scrollToLoad, fetchBlobWithXHR, blobToArrayBuffer, waitForContent, slee
             const timeStr = now.toISOString().split('T')[1].replace('Z', '') + '.' + String(now.getMilliseconds()).padStart(3, '0');
             const line = `[${timeStr}] ${ctxMarker} [${level}] ${msg}\n`;
             
-            let existing = localStorage.getItem('TOKI_DEBUG_LOGS') || '';
+            // [anti-fingerprint] 페이지(사이트) localStorage 대신 GM 저장소 사용 → 사이트에서 TOKI_* 키가 보이지 않음
+            let existing = (typeof GM_getValue !== 'undefined') ? (GM_getValue('TOKI_DEBUG_LOGS', '') || '') : '';
             if (existing.length > 300000) existing = existing.slice(-150000);
-            localStorage.setItem('TOKI_DEBUG_LOGS', existing + line);
+            if (typeof GM_setValue !== 'undefined') GM_setValue('TOKI_DEBUG_LOGS', existing + line);
         } catch (err) {}
     }
 
@@ -43,7 +44,7 @@ import { scrollToLoad, fetchBlobWithXHR, blobToArrayBuffer, waitForContent, slee
 
     window.downloadTokiLogs = function() {
         try {
-            const logs = localStorage.getItem('TOKI_DEBUG_LOGS') || '로그가 없습니다.';
+            const logs = ((typeof GM_getValue !== 'undefined') ? GM_getValue('TOKI_DEBUG_LOGS', '') : '') || '로그가 없습니다.';
             const blob = new Blob([logs], { type: 'text/plain;charset=utf-8' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -60,7 +61,7 @@ import { scrollToLoad, fetchBlobWithXHR, blobToArrayBuffer, waitForContent, slee
     };
     
     window.clearTokiLogs = function() {
-        localStorage.removeItem('TOKI_DEBUG_LOGS');
+        if (typeof GM_deleteValue !== 'undefined') GM_deleteValue('TOKI_DEBUG_LOGS');
         originalConsole.log("🗑️ 텍스트 로그 초기화 완료.");
     };
 
@@ -85,10 +86,10 @@ import { scrollToLoad, fetchBlobWithXHR, blobToArrayBuffer, waitForContent, slee
     // 🚀 [자식 팝업 - Worker] 다형성 미디어 수집 및 부모 창 IPC 브릿지
     // =============================================================
     let isSessionWorker = false;
-    try { isSessionWorker = sessionStorage.getItem('tokisync_worker_flag') === '1'; } catch(e) {}
+    try { isSessionWorker = sessionStorage.getItem('mv_wf') === '1'; } catch(e) {}
 
     const isWorkerPopup = (
-        window.name === 'tokisync-novel-worker' || 
+        window.name === 'mv-worker' || 
         (window.opener && window.name === '') ||
         isSessionWorker
     );
@@ -97,7 +98,7 @@ import { scrollToLoad, fetchBlobWithXHR, blobToArrayBuffer, waitForContent, slee
 
     if (isWorkerPopup) {
         // 향후 location.replace 등으로 인한 컨텍스트 소실(짝수 회차 방어)을 대비해 현재 탭(세션)에 워커 각인
-        try { sessionStorage.setItem('tokisync_worker_flag', '1'); } catch(e) {}
+        try { sessionStorage.setItem('mv_wf', '1'); } catch(e) {}
         console.log("🚀 [TokiSync-Worker] 자식 팝업 수동 대기 모드 기동");
         
         // window.opener 은폐 및 로컬 참조 복사

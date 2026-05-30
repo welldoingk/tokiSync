@@ -153,9 +153,9 @@ export async function maybeRunQueue(downloadFn) {
     }
 }
 
-/** 큐 관리 모달 (자체 포함 DOM, toki-modal 스타일 재사용) */
+/** 큐 관리 모달 (자체 포함 DOM, dsx-modal 스타일 재사용) */
 export function openQueueModal() {
-    const existing = document.getElementById('toki-queue-modal');
+    const existing = document.getElementById('dsx-queue-modal');
     if (existing) existing.remove();
 
     const q = getQueue();
@@ -163,44 +163,44 @@ export function openQueueModal() {
     const rows = q.map((it, i) => {
         const icon = it.status === 'done' ? '✅' : it.status === 'error' ? '❌' : '⏳';
         const label = it.title ? `${it.title}` : it.url;
-        return `<div class="toki-q-row" data-i="${i}">
-            <span class="toki-q-ic">${icon}</span>
-            <span class="toki-q-url" title="${it.url.replace(/"/g, '&quot;')}">${label.replace(/</g, '&lt;')}</span>
-            <button class="toki-q-del" data-i="${i}" title="제거">✕</button>
+        return `<div class="dsx-q-row" data-i="${i}">
+            <span class="dsx-q-ic">${icon}</span>
+            <span class="dsx-q-url" title="${it.url.replace(/"/g, '&quot;')}">${label.replace(/</g, '&lt;')}</span>
+            <button class="dsx-q-del" data-i="${i}" title="제거">✕</button>
         </div>`;
-    }).join('') || '<div class="toki-q-empty">큐가 비어 있습니다. 시리즈 URL을 추가하세요.</div>';
+    }).join('') || '<div class="dsx-q-empty">큐가 비어 있습니다. 시리즈 URL을 추가하세요.</div>';
 
     const overlay = document.createElement('div');
-    overlay.id = 'toki-queue-modal';
-    overlay.className = 'toki-modal-overlay';
+    overlay.id = 'dsx-queue-modal';
+    overlay.className = 'dsx-modal-overlay';
     overlay.innerHTML = `
         <style>
-          #toki-queue-modal .toki-q-list{max-height:240px;overflow-y:auto;margin:6px 0;display:flex;flex-direction:column;gap:4px}
-          #toki-queue-modal .toki-q-row{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;background:rgba(255,255,255,.06);font-size:12px}
-          #toki-queue-modal .toki-q-ic{flex:0 0 auto}
-          #toki-queue-modal .toki-q-url{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-          #toki-queue-modal .toki-q-del{flex:0 0 auto;background:transparent;border:none;color:#f87171;cursor:pointer;font-size:13px}
-          #toki-queue-modal .toki-q-empty{padding:12px;opacity:.6;font-size:12px;text-align:center}
+          #dsx-queue-modal .dsx-q-list{max-height:240px;overflow-y:auto;margin:6px 0;display:flex;flex-direction:column;gap:4px}
+          #dsx-queue-modal .dsx-q-row{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;background:rgba(255,255,255,.06);font-size:12px}
+          #dsx-queue-modal .dsx-q-ic{flex:0 0 auto}
+          #dsx-queue-modal .dsx-q-url{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+          #dsx-queue-modal .dsx-q-del{flex:0 0 auto;background:transparent;border:none;color:#f87171;cursor:pointer;font-size:13px}
+          #dsx-queue-modal .dsx-q-empty{padding:12px;opacity:.6;font-size:12px;text-align:center}
         </style>
-        <div class="toki-modal toki-modal-main">
-            <div class="toki-modal-header toki-modal-header-borderless">
-                <div class="toki-modal-title toki-text-lg">📋 다운로드 큐 ${running ? '<span style="color:#34d399">(실행 중)</span>' : ''}</div>
+        <div class="dsx-modal dsx-modal-main">
+            <div class="dsx-modal-header dsx-modal-header-borderless">
+                <div class="dsx-modal-title dsx-text-lg">📋 다운로드 큐 ${running ? '<span style="color:#34d399">(실행 중)</span>' : ''}</div>
             </div>
-            <div class="toki-section-title toki-mt-0">시리즈 URL 추가 (줄바꿈으로 여러 개)</div>
-            <div class="toki-control-group">
-                <textarea id="toki-q-input" class="toki-textarea" rows="4" placeholder="https://.../comic/12345&#10;https://.../webtoon/67890"></textarea>
+            <div class="dsx-section-title dsx-mt-0">시리즈 URL 추가 (줄바꿈으로 여러 개)</div>
+            <div class="dsx-control-group">
+                <textarea id="dsx-q-input" class="dsx-textarea" rows="4" placeholder="https://.../comic/12345&#10;https://.../webtoon/67890"></textarea>
             </div>
-            <div class="toki-btn-group-row">
-                <button id="toki-q-add" class="toki-btn-action toki-btn-secondary">+ 추가</button>
-                <button id="toki-q-add-cur" class="toki-btn-action toki-btn-secondary">+ 현재 페이지</button>
+            <div class="dsx-btn-group-row">
+                <button id="dsx-q-add" class="dsx-btn-action dsx-btn-secondary">+ 추가</button>
+                <button id="dsx-q-add-cur" class="dsx-btn-action dsx-btn-secondary">+ 현재 페이지</button>
             </div>
-            <div class="toki-section-title">대기열 (${q.length})</div>
-            <div id="toki-q-list" class="toki-q-list">${rows}</div>
-            <div class="toki-modal-footer toki-btn-group-row toki-mt-32">
-                <button id="toki-q-clear" class="toki-btn-action toki-btn-secondary">비우기</button>
+            <div class="dsx-section-title">대기열 (${q.length})</div>
+            <div id="dsx-q-list" class="dsx-q-list">${rows}</div>
+            <div class="dsx-modal-footer dsx-btn-group-row dsx-mt-32">
+                <button id="dsx-q-clear" class="dsx-btn-action dsx-btn-secondary">비우기</button>
                 ${running
-                    ? '<button id="toki-q-stop" class="toki-btn-action">⏸️ 정지</button>'
-                    : '<button id="toki-q-start" class="toki-btn-action">▶️ 시작</button>'}
+                    ? '<button id="dsx-q-stop" class="dsx-btn-action">⏸️ 정지</button>'
+                    : '<button id="dsx-q-start" class="dsx-btn-action">▶️ 시작</button>'}
             </div>
         </div>`;
     document.body.appendChild(overlay);
@@ -208,26 +208,26 @@ export function openQueueModal() {
     const refresh = () => openQueueModal();
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
 
-    overlay.querySelector('#toki-q-add').onclick = () => {
-        const n = addUrls(document.getElementById('toki-q-input').value);
+    overlay.querySelector('#dsx-q-add').onclick = () => {
+        const n = addUrls(document.getElementById('dsx-q-input').value);
         tokiAlert(n > 0 ? `${n}개 추가됨` : '추가된 URL이 없습니다 (중복 또는 형식 오류).');
         refresh();
     };
-    overlay.querySelector('#toki-q-add-cur').onclick = () => {
+    overlay.querySelector('#dsx-q-add-cur').onclick = () => {
         const n = addUrls(location.href);
         tokiAlert(n > 0 ? '현재 페이지 추가됨' : '이미 큐에 있습니다.');
         refresh();
     };
-    overlay.querySelectorAll('.toki-q-del').forEach(btn => {
+    overlay.querySelectorAll('.dsx-q-del').forEach(btn => {
         btn.onclick = () => {
             const i = parseInt(btn.dataset.i, 10);
             const arr = getQueue(); arr.splice(i, 1); saveQueue(arr); refresh();
         };
     });
-    overlay.querySelector('#toki-q-clear').onclick = () => { clearQueue(); refresh(); };
-    const startBtn = overlay.querySelector('#toki-q-start');
+    overlay.querySelector('#dsx-q-clear').onclick = () => { clearQueue(); refresh(); };
+    const startBtn = overlay.querySelector('#dsx-q-start');
     if (startBtn) startBtn.onclick = () => { overlay.remove(); startQueue(); };
-    const stopBtn = overlay.querySelector('#toki-q-stop');
+    const stopBtn = overlay.querySelector('#dsx-q-stop');
     if (stopBtn) stopBtn.onclick = () => { stopQueue(); refresh(); };
 }
 
