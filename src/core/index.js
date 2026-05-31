@@ -185,20 +185,27 @@ import { scrollToLoad, fetchBlobWithXHR, blobToArrayBuffer, waitForContent, slee
                         console.log(`[TokiSync-Worker] 소설 Shadow DOM 대기 중... (시도: ${attempt}회)`);
 
                         const novelSel = viewerCfg.novelContent || '#novel_content';
-                        // 동적 셀렉터 및 폴백 적용
-                        const shadowHost = document.querySelector(novelSel)?.getRootNode()?.host
-                                        || document.querySelector('.novel-epub-rendered')?.getRootNode()?.host
-                                        || document.querySelector('.vw-bot-mini--novel')?.parentElement?.querySelector('div[style*="--novel-font-size"]');
+                        // 동적 셀렉터 및 폴백 적용 — 본문 shadow 호스트 탐지
+                        //  sbxh(뉴토끼): 본문은 `article.novel-viewer > div[style*="--novel-font-size"]`의
+                        //  닫힌 shadow 에 봉인됨(TOKI_FORCE_OPEN_SHADOW 로 강제 open 시 .shadowRoot 접근 가능).
+                        const novelRoot = document.querySelector(novelSel);
+                        const shadowHost =
+                               (novelRoot && novelRoot.shadowRoot ? novelRoot : null)
+                            || (novelRoot && novelRoot.querySelector('div[style*="--novel-font-size"]'))
+                            || document.querySelector('div[style*="--novel-font-size"]')
+                            || document.querySelector('.novel-epub-rendered')?.getRootNode()?.host
+                            || document.querySelector(novelSel)?.getRootNode()?.host
+                            || document.querySelector('.vw-bot-mini--novel')?.parentElement?.querySelector('div[style*="--novel-font-size"]');
 
                         if (shadowHost && shadowHost.shadowRoot) {
                             clearInterval(checkInterval);
                             let content = '';
 
-                            // 1차: <p> 태그 수집
+                            // 1차: <p> 태그 수집 (innerText 로 <br> 줄바꿈 보존)
                             const pTags = shadowHost.shadowRoot.querySelectorAll('.novel-epub-rendered p, p');
                             if (pTags.length > 0) {
                                 content = Array.from(pTags)
-                                    .map(p => p.textContent.trim())
+                                    .map(p => (p.innerText || p.textContent || '').trim())
                                     .filter(text => text.length > 0)
                                     .join('\n\n');
                             } else {

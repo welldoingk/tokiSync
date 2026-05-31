@@ -20,6 +20,7 @@ export const CFG_WEBDAV_USER = "TOKI_WEBDAV_USER";
 export const CFG_WEBDAV_PASS = "TOKI_WEBDAV_PASS";
 export const CFG_IMG_CONCURRENCY = "TOKI_IMG_CONCURRENCY"; // 회차 내 이미지 동시 다운로드 수 (기본 8)
 export const CFG_WAF_JITTER_SEC = "TOKI_WAF_JITTER_SEC";   // 회차 사이 WAF 지터 기준 초 (기본 3 → 3~5초)
+export const CFG_FORCE_OPEN_SHADOW = "TOKI_FORCE_OPEN_SHADOW"; // 닫힌 shadow 강제 open(소설 본문 추출용, 기본 OFF)
 // -- 원격 제어 (컨트롤 API 폴링) --
 export const CFG_REMOTE_ENABLED = "TOKI_REMOTE_ENABLED";   // "1" | "0"
 export const CFG_REMOTE_API_URL = "TOKI_REMOTE_API_URL";   // 예: http://192.168.0.x:8787
@@ -114,7 +115,8 @@ export function getConfig() {
         webdavPass: GM_getValue(CFG_WEBDAV_PASS, ""),
         concurrency: parseInt(GM_getValue(CFG_CONCURRENCY, "1"), 10) || 1,
         imgConcurrency: Math.min(16, Math.max(1, parseInt(GM_getValue(CFG_IMG_CONCURRENCY, "8"), 10) || 8)),
-        wafJitterSec: Math.min(10, Math.max(0, parseFloat(GM_getValue(CFG_WAF_JITTER_SEC, "3")) || 3))
+        wafJitterSec: Math.min(10, Math.max(0, parseFloat(GM_getValue(CFG_WAF_JITTER_SEC, "3")) || 3)),
+        forceOpenShadow: GM_getValue(CFG_FORCE_OPEN_SHADOW, false) === true || GM_getValue(CFG_FORCE_OPEN_SHADOW, false) === '1'
     };
 }
 
@@ -214,6 +216,13 @@ export function showConfigModal() {
                     <label class="dsx-label">WAF 지터 기준초 (기본 3 → 3~5초, 낮출수록 빠르지만 밴↑)</label>
                     <input type="number" id="dsx-cfg-waf-jitter" class="dsx-input" min="0" max="10" step="0.5" placeholder="3" value="${config.wafJitterSec}">
                 </div>
+            </div>
+            <div class="dsx-control-group">
+                <label class="dsx-label" style="display:flex;align-items:center;gap:8px;">
+                    <input type="checkbox" id="dsx-cfg-force-shadow" ${config.forceOpenShadow ? 'checked' : ''}>
+                    닫힌 Shadow DOM 강제 열기 (소설 본문 추출용)
+                </label>
+                <small style="opacity:.6">sbxh 등 소설이 닫힌 shadow로 본문을 숨기는 사이트에서만 켜세요. 만화는 끄세요(차단 위험).</small>
             </div>
 
             <div class="dsx-section-title">Global Policies</div>
@@ -326,6 +335,7 @@ export function showConfigModal() {
         let newWafJitter = parseFloat(document.getElementById('dsx-cfg-waf-jitter').value);
         if (!Number.isFinite(newWafJitter) || newWafJitter < 0) newWafJitter = 3;
         if (newWafJitter > 10) newWafJitter = 10;
+        const newForceShadow = !!document.getElementById('dsx-cfg-force-shadow')?.checked;
 
         // Validate Custom Rules JSON
         let validCustomRule = '[]';
@@ -371,6 +381,7 @@ export function showConfigModal() {
         setConfig(CFG_CONCURRENCY, String(newConcurrency));
         setConfig(CFG_IMG_CONCURRENCY, String(newImgConc));
         setConfig(CFG_WAF_JITTER_SEC, String(newWafJitter));
+        setConfig(CFG_FORCE_OPEN_SHADOW, newForceShadow); // boolean — index.js 워커가 truthy 체크
 
         tokiAlert('설정이 저장되었습니다.');
         overlay.remove();
