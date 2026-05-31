@@ -25,6 +25,8 @@ export const CFG_REMOTE_ENABLED = "TOKI_REMOTE_ENABLED";   // "1" | "0"
 export const CFG_REMOTE_API_URL = "TOKI_REMOTE_API_URL";   // 예: http://192.168.0.x:8787
 export const CFG_REMOTE_API_TOKEN = "TOKI_REMOTE_API_TOKEN";
 export const CFG_REMOTE_POLL_SEC = "TOKI_REMOTE_POLL_SEC"; // 폴링 주기(초), 기본 5
+export const CFG_REMOTE_CLIENT_ID = "TOKI_REMOTE_CLIENT_ID"; // 멀티-IP 식별 라벨(예: A-direct). 설정 시 lease 모드
+export const CFG_REMOTE_LEASE_MAX = "TOKI_REMOTE_LEASE_MAX"; // 동시 보유 lease 목표 수(기본 2)
 
 /**
  * [custom] CBZ 압축 모드 — DEFLATE (기본, 작음/느림) 또는 STORE (큼/빠름)
@@ -130,6 +132,8 @@ export function getRemoteConfig() {
         url: gv(CFG_REMOTE_API_URL, ''),
         token: gv(CFG_REMOTE_API_TOKEN, ''),
         pollSec: Math.max(2, parseInt(gv(CFG_REMOTE_POLL_SEC, '5'), 10) || 5),
+        clientId: (gv(CFG_REMOTE_CLIENT_ID, '') || '').trim(), // 설정 시 lease 모드, 빈값이면 레거시 /queue 모드
+        leaseMax: Math.max(1, Math.min(20, parseInt(gv(CFG_REMOTE_LEASE_MAX, '2'), 10) || 2)),
     };
 }
 

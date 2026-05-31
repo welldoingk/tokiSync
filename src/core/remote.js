@@ -16,6 +16,7 @@
  */
 import {
     addUrls,
+    addLeasedUnits,
     startQueue,
     stopQueue,
     clearQueue,
@@ -30,6 +31,8 @@ import {
     CFG_REMOTE_API_URL,
     CFG_REMOTE_API_TOKEN,
     CFG_REMOTE_POLL_SEC,
+    CFG_REMOTE_CLIENT_ID,
+    CFG_REMOTE_LEASE_MAX,
 } from './config.js';
 
 const K_LAST_SEQ = 'TOKI_REMOTE_LAST_SEQ';
@@ -37,6 +40,8 @@ const K_LAST_SEQ = 'TOKI_REMOTE_LAST_SEQ';
 let _timer = null;
 let _started = false;
 let _lastProgress = null;
+let _externalIp = '';   // 외부 IP(식별/검증용, 1회 조회 후 캐시)
+let _ipQueried = false;
 
 function _gv(k, d) {
     try { return typeof GM_getValue !== 'undefined' ? GM_getValue(k, d) : d; }
@@ -109,10 +114,16 @@ function applyCommand(cmd) {
     }
 }
 
+/** 폴링 디스패처 — clientId 설정 시 lease 모드, 아니면 레거시 글로벌 /queue 모드(하위호환). */
 async function poll() {
     const cfg = getRemoteConfig();
     if (!cfg.enabled || !cfg.url) return;
+    if (cfg.clientId) return pollLease(cfg);
+    return pollLegacy(cfg);
+}
 
+/** 레거시 단일 클라 모드 — 글로벌 /queue 명령 스트림 폴링 + /progress 미러. */
+async function pollLegacy(cfg) {
     let lastSeq = parseInt(_gv(K_LAST_SEQ, '-1'), 10);
     if (isNaN(lastSeq)) lastSeq = -1;
 
@@ -160,6 +171,97 @@ async function poll() {
     }
 }
 
+/**
+ * 멀티-IP lease 모드 — 작업 분배(work-stealing).
+ *  ① 완료(done/error)된 unit을 /complete로 보고 → 성공 시 로컬 큐에서 제거.
+ *  ② pending unit이 부족하면 /lease로 보충해 로컬 큐에 주입(중복 없는 회차 자동 분배).
+ *  ③ /progress로 clientId·외부IP·진행률·보유 unit heartbeat(서버가 lease TTL 갱신).
+ * 페이지 내비게이션을 거쳐도 unitId가 GM 큐에 영속되므로 완료 매핑/재투입이 안전하게 이어진다.
+ */
+async function pollLease(cfg) {
+    // ① 완료 보고 — unitId가 붙은 큐 항목 중 done/error 수집
+    const q = getQueue();
+    const finished = q.filter((i) => i.unitId && (i.status === 'done' || i.status === 'error'));
+    if (finished.length) {
+        const results = finished.map((i) => ({ id: i.unitId, ok: i.status === 'done' }));
+        try {
+            await gmRequest({
+                method: 'POST',
+                url: `${base(cfg.url)}/complete`,
+                token: cfg.token,
+                data: { clientId: cfg.clientId, results },
+            });
+            // 보고 성공 → 종결 항목 제거(큐 비대화 방지). 서버는 중복 /complete를 멱등 무시하므로
+            // 제거 전에 네비게이션이 끼어도 다음 폴에서 재보고 후 정리되어 유실 없음.
+            const doneIds = new Set(finished.map((i) => i.unitId));
+            saveQueue(getQueue().filter((i) => !(i.unitId && doneIds.has(i.unitId) && (i.status === 'done' || i.status === 'error'))));
+        } catch (e) {
+            // 실패 시 제거하지 않고 다음 주기 재시도(at-least-once 보고).
+        }
+    }
+
+    // ② 임대 보충 — pending unit 수가 목표(leaseMax) 미만이면 부족분만큼 요청
+    const pendingUnits = getQueue().filter((i) => i.unitId && i.status === 'pending').length;
+    if (pendingUnits < cfg.leaseMax) {
+        const want = cfg.leaseMax - pendingUnits;
+        try {
+            const res = await gmRequest({
+                method: 'GET',
+                url: `${base(cfg.url)}/lease?clientId=${encodeURIComponent(cfg.clientId)}&max=${want}`,
+                token: cfg.token,
+            });
+            const units = Array.isArray(res.units) ? res.units : [];
+            const added = addLeasedUnits(units);
+            // 임대분이 생겼고 큐가 정지 상태면 시작(첫 pending으로 내비게이션 → 자동 다운로드 진입)
+            if (added > 0 && !isRunning() && getQueue().some((i) => i.status === 'pending')) {
+                startQueue();
+                return; // startQueue는 내비게이션을 유발 → 이번 주기 종료
+            }
+        } catch (e) {
+            const m = e && e.message ? e.message : '';
+            if (/^HTTP [45]/.test(m)) {
+                try { console.warn('[TokiSync-Remote] lease 실패:', m); } catch {}
+            }
+        }
+    }
+
+    // ③ heartbeat — clientId/외부IP/진행률/보유 unit 보고(서버가 보유 lease TTL 갱신)
+    const cur = getQueue();
+    const current = cur.filter((i) => i.unitId && i.status === 'pending').map((i) => i.unitId);
+    try {
+        await gmRequest({
+            method: 'POST',
+            url: `${base(cfg.url)}/progress`,
+            token: cfg.token,
+            data: {
+                clientId: cfg.clientId,
+                label: cfg.clientId,
+                ip: await ensureExternalIp(),
+                queue: cur,
+                running: isRunning(),
+                progress: _lastProgress,
+                current,
+            },
+        });
+    } catch (e) {
+        const m = e && e.message ? e.message : '';
+        if (/^HTTP [45]/.test(m)) {
+            try { console.warn('[TokiSync-Remote] heartbeat 실패:', m); } catch {}
+        }
+    }
+}
+
+/** 외부 IP 1회 조회(식별/검증용, 선택). 실패해도 ''로 폴백 — IP 표시는 best-effort. */
+async function ensureExternalIp() {
+    if (_ipQueried) return _externalIp;
+    _ipQueried = true;
+    try {
+        const r = await gmRequest({ method: 'GET', url: 'https://api.ipify.org?format=json' });
+        if (r && typeof r.ip === 'string') _externalIp = r.ip;
+    } catch { /* @connect 미허용/오프라인 → 빈 문자열 유지 */ }
+    return _externalIp;
+}
+
 function onCaptcha() {
     const cfg = getRemoteConfig();
     if (!cfg.enabled || !cfg.url) return;
@@ -168,6 +270,8 @@ function onCaptcha() {
         url: `${base(cfg.url)}/captcha`,
         token: cfg.token,
         data: {
+            // clientId가 있으면 서버가 해당 클라의 lease를 즉시 재투입(다른 클라는 계속).
+            clientId: cfg.clientId || undefined,
             message: '⚠️ tokiSync 캡차 감지 — 원격에서 브라우저 확인 필요',
             url: location.href,
         },
@@ -239,6 +343,15 @@ export function openRemoteModal() {
                 <label class="dsx-label">폴링 주기 (초)</label>
                 <input type="number" id="dsx-rm-poll" class="dsx-input" min="2" max="60" value="${cfg.pollSec}">
             </div>
+            <div class="dsx-section-title">멀티-IP 분배 (lease 모드)</div>
+            <div class="dsx-control-group">
+                <label class="dsx-label">클라이언트 ID (비우면 단일 모드)</label>
+                <input type="text" id="dsx-rm-client" class="dsx-input" placeholder="예: A-direct / B-vpn" value="${(cfg.clientId || '').replace(/"/g, '&quot;')}">
+            </div>
+            <div class="dsx-control-group">
+                <label class="dsx-label">동시 보유 작업 수 (lease max, 기본 2)</label>
+                <input type="number" id="dsx-rm-leasemax" class="dsx-input" min="1" max="20" value="${cfg.leaseMax}">
+            </div>
             <div class="dsx-modal-footer dsx-btn-group-row dsx-mt-32">
                 <button id="dsx-rm-cancel" class="dsx-btn-action dsx-btn-secondary">취소</button>
                 <button id="dsx-rm-save" class="dsx-btn-action">저장 (새로고침)</button>
@@ -255,6 +368,8 @@ export function openRemoteModal() {
         _sv(CFG_REMOTE_API_URL, overlay.querySelector('#dsx-rm-url').value.trim());
         _sv(CFG_REMOTE_API_TOKEN, overlay.querySelector('#dsx-rm-token').value.trim());
         _sv(CFG_REMOTE_POLL_SEC, String(parseInt(overlay.querySelector('#dsx-rm-poll').value, 10) || 5));
+        _sv(CFG_REMOTE_CLIENT_ID, overlay.querySelector('#dsx-rm-client').value.trim());
+        _sv(CFG_REMOTE_LEASE_MAX, String(parseInt(overlay.querySelector('#dsx-rm-leasemax').value, 10) || 2));
         _sv(K_LAST_SEQ, '-1'); // 설정 변경 시 기준선 재설정
         overlay.remove();
         try { location.reload(); } catch {}

@@ -64,6 +64,29 @@ export function addUrls(text) {
     return added;
 }
 
+/**
+ * 원격 lease로 임대받은 unit들을 로컬 큐에 주입(unitId 부착, pathKey 기준 중복 제거).
+ * unitId가 있으면 remote.js가 완료 시 서버에 `/complete`로 매핑 보고한다.
+ * @param {Array<{id:string,url:string,label?:string}>} units
+ * @returns {number} 실제 추가된 수
+ */
+export function addLeasedUnits(units) {
+    if (!Array.isArray(units) || units.length === 0) return 0;
+    const q = getQueue();
+    const existing = new Set(q.map(i => pathKey(i.url)));
+    let added = 0;
+    for (const u of units) {
+        if (!u || !u.url || !/^https?:\/\//i.test(u.url)) continue;
+        const k = pathKey(u.url);
+        if (existing.has(k)) continue;
+        existing.add(k);
+        q.push({ url: u.url, title: u.label || '', status: 'pending', unitId: u.id });
+        added++;
+    }
+    if (added) saveQueue(q);
+    return added;
+}
+
 export function clearQueue() { saveQueue([]); setRunning(false); }
 
 /** 큐 시작 — 첫 대기 항목으로 이동(현재 페이지가 그 항목이면 자동 처리에 위임) */
