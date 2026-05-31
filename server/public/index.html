@@ -26,13 +26,54 @@
         </div>
 
         <div class="panel">
-            <h2>제어</h2>
+            <h2>제어 <small class="muted">(단일 모드)</small></h2>
             <div class="row">
                 <button id="btn-start" class="blue">▶️ 시작</button>
                 <button id="btn-stop">⏸️ 정지</button>
                 <button id="btn-clear" class="danger">🗑️ 비우기</button>
             </div>
             <div id="progress" class="progress"></div>
+        </div>
+
+        <div class="panel" id="pool-panel">
+            <h2>🌐 멀티-IP 작업 풀</h2>
+            <div id="pool-bar" class="pool-bar"></div>
+            <div id="pool-counts" class="pool-counts muted"></div>
+            <div class="row">
+                <button id="btn-requeue-failed" class="small">↩️ 실패분 재투입</button>
+                <button id="btn-requeue-stuck" class="small">🩹 멈춘 lease 재투입</button>
+            </div>
+            <h2 style="margin-top:14px">클라이언트</h2>
+            <div id="clients" class="clients-list"><div class="empty">대기 중…</div></div>
+        </div>
+
+        <div class="panel" id="jobs-panel">
+            <h2>작업 투입 (멀티-IP 분배)</h2>
+            <div class="settings-grid">
+                <div>
+                    <label>작품/시리즈 라벨 (선택)</label>
+                    <input type="text" id="job-series" placeholder="예: 나 혼자만 레벨업" />
+                </div>
+            </div>
+            <label class="muted" style="margin-top:8px;display:block">회차 URL 목록 (줄바꿈으로 여러 개 = 각각 1 unit)</label>
+            <textarea id="job-urls" placeholder="https://.../12345/1&#10;https://.../12345/2 (줄바꿈으로 여러 개)"></textarea>
+            <details style="margin-top:6px">
+                <summary>범위 템플릿으로 생성 ({n} 치환)</summary>
+                <div class="settings-grid" style="margin-top:8px">
+                    <div>
+                        <label>URL 템플릿 ({n} = 회차 번호)</label>
+                        <input type="text" id="job-tpl" placeholder="https://.../12345/{n}" />
+                    </div>
+                    <div class="row">
+                        <div><label>시작</label><input type="number" id="job-from" min="1" value="1" style="width:90px" /></div>
+                        <div><label>끝</label><input type="number" id="job-to" min="1" value="10" style="width:90px" /></div>
+                        <button id="btn-tpl-gen" class="small">↧ 목록에 추가</button>
+                    </div>
+                </div>
+            </details>
+            <div class="row" style="margin-top:8px">
+                <button id="btn-jobs" class="primary">➕ 작업 풀에 투입</button>
+            </div>
         </div>
 
         <div class="panel">

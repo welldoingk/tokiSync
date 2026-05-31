@@ -168,4 +168,44 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
     z-index: 50;
     border: 1px solid var(--border);
 }
+
+/* ── 멀티-IP 작업 풀 ── */
+.pool-bar {
+    display: flex;
+    height: 14px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+}
+.pool-bar .seg { height: 100%; }
+.pool-bar .seg-done { background: var(--accent); }
+.pool-bar .seg-leased { background: var(--accent-2); }
+.pool-bar .seg-pending { background: var(--muted); }
+.pool-bar .seg-failed { background: var(--danger); }
+.pool-bar .seg-empty { background: var(--panel-2); }
+.pool-counts { margin-top: 6px; font-size: 12.5px; }
+
+.clients-list { display: flex; flex-direction: column; gap: 8px; }
+.client-card {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 9px 11px;
+}
+.client-card .cc-head { display: flex; align-items: center; gap: 8px; }
+.client-card .cc-meta { margin-top: 3px; font-size: 12px; }
+.client-card .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+.client-card .dot.on { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+.client-card .dot.off { background: var(--muted); }
+.client-card .tag {
+    margin-left: auto;
+    font-size: 11px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--muted);
+}
+.client-card .tag.run { color: var(--accent); border-color: var(--accent); }
 #toast.show { opacity: 0.95; }

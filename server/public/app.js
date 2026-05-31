@@ -127,6 +127,72 @@
         pr.className = 'pill ' + (running ? 'run' : '');
     }
 
+    // ── 멀티-IP lease 모드 렌더링 ──────────────────────────────────────
+    const POOL_SEGS = [
+        { k: 'done', cls: 'seg-done', label: '완료' },
+        { k: 'leased', cls: 'seg-leased', label: '진행' },
+        { k: 'pending', cls: 'seg-pending', label: '대기' },
+        { k: 'failed', cls: 'seg-failed', label: '실패' },
+    ];
+
+    function renderPool(pool) {
+        const bar = $('pool-bar');
+        const counts = $('pool-counts');
+        const total = (pool && pool.total) || 0;
+        if (!total) {
+            bar.innerHTML = '<div class="seg seg-empty" style="width:100%"></div>';
+            counts.textContent = '작업 풀이 비어 있습니다. 아래에서 작업을 투입하세요.';
+            return;
+        }
+        bar.innerHTML = POOL_SEGS.map((s) => {
+            const n = pool[s.k] || 0;
+            if (!n) return '';
+            const pct = ((n / total) * 100).toFixed(1);
+            return `<div class="seg ${s.cls}" style="width:${pct}%" title="${s.label} ${n}"></div>`;
+        }).join('');
+        counts.textContent = POOL_SEGS.map((s) => `${s.label} ${pool[s.k] || 0}`).join(' · ') + ` · 합계 ${total}`;
+    }
+
+    function renderClients(clients) {
+        const box = $('clients');
+        if (!clients || !clients.length) {
+            box.innerHTML = '<div class="empty">연결된 클라이언트가 없습니다 (clientId 설정 필요).</div>';
+            return;
+        }
+        box.innerHTML = clients
+            .map((c) => {
+                const p = c.progress && typeof c.progress === 'object' ? c.progress : null;
+                const phase = p && (p.phase || (p.pos && p.total ? `${p.pos}/${p.total}` : '')) || '';
+                const dot = c.online ? 'on' : 'off';
+                const run = c.running ? '<span class="tag run">실행</span>' : '<span class="tag">정지</span>';
+                return `<div class="client-card">
+                    <div class="cc-head">
+                        <span class="dot ${dot}"></span>
+                        <strong>${esc(c.label || c.clientId)}</strong>
+                        ${c.ip ? `<span class="muted">${esc(c.ip)}</span>` : ''}
+                        ${run}
+                    </div>
+                    <div class="cc-meta muted">
+                        보유 ${c.leased || 0}건${phase ? ` · ${esc(phase)}` : ''} · ${c.online ? fmtTime(c.ts) : '오프라인'}
+                    </div>
+                </div>`;
+            })
+            .join('');
+    }
+
+    async function refreshClients() {
+        try {
+            const data = await api('/clients');
+            renderPool(data.pool || {});
+            renderClients(data.clients || []);
+            return data.pool || {};
+        } catch (e) {
+            // 구버전 서버(엔드포인트 없음)면 패널 숨김
+            $('pool-panel').style.display = 'none';
+            return null;
+        }
+    }
+
     async function refresh() {
         try {
             const data = await api('/queue');
@@ -140,6 +206,52 @@
         } catch (e) {
             setPills(false, false);
             $('footer').textContent = `연결 실패: ${e.message}`;
+        }
+        refreshClients();
+    }
+
+    // 작업 투입 (/jobs)
+    async function submitJobs() {
+        const series = $('job-series').value.trim();
+        const text = $('job-urls').value;
+        const urls = text.split(/[\s\n]+/).map((s) => s.trim()).filter((s) => /^https?:\/\//i.test(s));
+        if (!urls.length) return toast('회차 URL을 입력하세요');
+        try {
+            const r = await api('/jobs', { method: 'POST', body: { series, urls } });
+            $('job-urls').value = '';
+            toast(`${r.added}개 투입 (중복 ${r.skipped} 제외)`);
+            refresh();
+        } catch (e) {
+            toast('투입 실패: ' + e.message);
+        }
+    }
+
+    // 범위 템플릿 → URL 목록 생성({n} 치환)
+    function genFromTemplate() {
+        const tpl = $('job-tpl').value.trim();
+        const from = parseInt($('job-from').value, 10);
+        const to = parseInt($('job-to').value, 10);
+        if (!tpl.includes('{n}')) return toast('템플릿에 {n}을 포함하세요');
+        if (!Number.isFinite(from) || !Number.isFinite(to) || from > to) return toast('범위가 올바르지 않습니다');
+        if (to - from > 2000) return toast('한 번에 2000개까지 생성 가능');
+        const urls = [];
+        for (let n = from; n <= to; n++) urls.push(tpl.replace(/\{n\}/g, String(n)));
+        const cur = $('job-urls').value.trim();
+        $('job-urls').value = (cur ? cur + '\n' : '') + urls.join('\n');
+        toast(`${urls.length}개 생성됨`);
+    }
+
+    // 실패/멈춤 unit 재투입
+    async function requeueByStatus(status, label) {
+        try {
+            const u = await api('/units?status=' + encodeURIComponent(status));
+            const ids = (u.units || []).map((x) => x.id);
+            if (!ids.length) return toast(`${label} unit이 없습니다`);
+            const r = await api('/requeue', { method: 'POST', body: { ids } });
+            toast(`${r.requeued}건 재투입`);
+            refresh();
+        } catch (e) {
+            toast('재투입 실패: ' + e.message);
         }
     }
 
@@ -205,6 +317,10 @@
             if (confirm('큐를 비울까요?')) cmd('/queue/clear', '비우기 명령 전송');
         };
         $('btn-save').onclick = saveSettings;
+        $('btn-jobs').onclick = submitJobs;
+        $('btn-tpl-gen').onclick = genFromTemplate;
+        $('btn-requeue-failed').onclick = () => requeueByStatus('failed', '실패');
+        $('btn-requeue-stuck').onclick = () => requeueByStatus('leased', '진행 중');
         refresh();
         startPolling();
     }
