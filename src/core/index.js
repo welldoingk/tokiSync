@@ -96,24 +96,40 @@ import { scrollToLoad, fetchBlobWithXHR, blobToArrayBuffer, waitForContent, slee
         try { sessionStorage.setItem('mv_wf', '1'); } catch(e) {}
         console.log("🚀 [TokiSync-Worker] 자식 팝업 수동 대기 모드 기동");
 
-        // [추출용] 닫힌 Shadow DOM 강제 개방 — 콘텐츠 종류별 자동 분기.
+        // [추출용] 닫힌 Shadow DOM 선택적 개방 — 콘텐츠 종류별 자동 분기 + 본문 호스트만 개방.
         //   attachShadow Proxy 는 닫힌 shadow 를 강제 open 시키는데, 만화 페이지에선 사이트의
-        //   안티-변조 탐지(userscript_spoof)에 걸려 워커가 ntk_blk 하드차단됨(이미지 0). 반면
-        //   sbxh 소설 본문은 닫힌 shadow 에 봉인돼 있어 force-open 없이는 추출 불가(실측: 소설
-        //   페이지에선 force-open 해도 ntk_blk 미발생).
-        //   → 워커 URL 이 소설(`/novel/`)일 때만 자동 ON, 만화(`/manhwa·/manga·/webtoon`)는 OFF.
-        //     수동 오버라이드: GM_setValue('TOKI_FORCE_OPEN_SHADOW', true) → 모든 사이트에서 강제 ON.
+        //   안티-변조 탐지(userscript_spoof)에 걸려 워커가 ntk_blk 하드차단됨. → /novel/ URL 일 때만 ON.
+        //   ⚠️ 연속 다운로드 시 ntk_blk 재발 관측: sbxh 는 "임시 div 에 closed shadow 를 만들어
+        //      열렸는지" 확인하는 probe 로 변조를 탐지하는 것으로 추정. 모든 closed shadow 를 열면
+        //      그 probe 까지 열려 적발됨. → **본문 호스트(article.novel-viewer 내부, 문서에 연결된
+        //      요소)의 shadow 만 선택적으로 open** 하고, detached/본문영역 밖 shadow(=탐지 probe)는
+        //      닫힌 채로 둬 변조 footprint 를 최소화한다.
+        //   수동 오버라이드: GM_setValue('TOKI_FORCE_OPEN_SHADOW', true) → 모든 사이트에서 ON.
         try {
             const _urlIsNovel = /\/novel\//i.test(location.pathname);
             const _gmForce = typeof GM_getValue !== 'undefined' &&
                 (GM_getValue('TOKI_FORCE_OPEN_SHADOW', false) === true ||
                  GM_getValue('TOKI_FORCE_OPEN_SHADOW', false) === '1');
             if (_urlIsNovel || _gmForce) {
+                // 본문 호스트로 보이는지 판정 — sbxh 탐지 probe(문서 미연결 임시 div)는 제외.
+                const _isContentHost = (host) => {
+                    try {
+                        if (!host || host.nodeType !== 1) return false;
+                        // 1차(가장 강한 신호): 본문 호스트는 --novel-font-size 스타일을 가짐.
+                        //   sbxh 탐지 probe(임시 div)엔 없음 → 연결 타이밍과 무관하게 본문만 개방.
+                        const st = (host.getAttribute && host.getAttribute('style')) || '';
+                        if (/--novel-font-size/i.test(st)) return true;
+                        // 2차: 문서에 연결 + 소설 본문 영역 안. detached(=탐지 probe)는 제외.
+                        if (!host.isConnected) return false;
+                        if (host.closest && host.closest('article.novel-viewer, #novel_content, .novel-viewer, .novel-epub-rendered')) return true;
+                        return false;
+                    } catch (e) { return false; }
+                };
                 const originalAttachShadow = Element.prototype.attachShadow;
                 Element.prototype.attachShadow = new Proxy(originalAttachShadow, {
                     apply(target, thisArg, argumentsList) {
-                        if (argumentsList[0] && argumentsList[0].mode === 'closed') {
-                            console.log('[TokiSync-Worker] 🔒 닫힌 Shadow DOM 감지 -> Open 모드로 개방 완료');
+                        if (argumentsList[0] && argumentsList[0].mode === 'closed' && _isContentHost(thisArg)) {
+                            console.log('[TokiSync-Worker] 🔓 본문 호스트 닫힌 Shadow 선택적 개방');
                             argumentsList[0].mode = 'open';
                         }
                         return Reflect.apply(target, thisArg, argumentsList);
