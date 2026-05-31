@@ -270,10 +270,12 @@ export async function scrollToLoad(iframeDoc, stallTimeoutMs = 20000, viewerCfg 
     };
 
     let lastCount = -1;
+    let lastTotal = -1;
     let stallElapsed = 0;
 
     while (true) {
         const images = Array.from(iframeDoc.querySelectorAll(targetSelectors));
+        const total = images.length;
         const remaining = images.filter(img => {
             const src = img.src || '';
             // 1. 알려진 플레이스홀더 URL → 대기
@@ -285,15 +287,23 @@ export async function scrollToLoad(iframeDoc, stallTimeoutMs = 20000, viewerCfg 
             return false;
         });
 
-        if (remaining.length === 0) {
-            logger.log('[ScrollToLoad] Phase 2 완료: 모든 이미지 URL 활성화!', 'DOM:Scroll');
+        // [custom] 뷰어가 스크롤에 따라 img 요소를 "늦게 생성"하는 사이트(sbxh 등) 대응:
+        //   총 img 개수가 계속 늘면 아직 전부 안 만들어진 것 → 완료로 보지 않고 더 스크롤한다.
+        //   (Phase 1의 1회 바닥 스크롤만으론 처음 몇 개만 생성돼 "2개만 추출" 조기종료가 발생)
+        const growing = total > lastTotal;
+
+        if (remaining.length === 0 && !growing) {
+            logger.log(`[ScrollToLoad] Phase 2 완료: 모든 이미지 URL 활성화! (총 ${total}개)`, 'DOM:Scroll');
             break;
         }
 
-        if (remaining.length < lastCount || lastCount === -1) {
-            // 진행 중 → 스톨 타이머 리셋
+        if (growing || remaining.length < lastCount || lastCount === -1) {
+            // 진행 중(로딩 또는 신규 생성) → 스톨 타이머 리셋 + 추가 생성/로딩 유도 스크롤
             stallElapsed = 0;
-            logger.log(`[ScrollToLoad] 진행 중... 잔여 lazy: ${remaining.length}개`, 'DOM:Scroll');
+            try { if (images.length) images[images.length - 1].scrollIntoView({ block: 'center' }); } catch (e) {}
+            win.scrollTo({ top: iframeDoc.documentElement.scrollHeight, behavior: 'auto' });
+            if (isHidden) win.dispatchEvent(new Event('scroll'));
+            logger.log(`[ScrollToLoad] 진행 중... 총 ${total}개 / 잔여 lazy ${remaining.length}개`, 'DOM:Scroll');
         } else {
             // 변화 없음 → 스톨 누적
             stallElapsed += POLL_INTERVAL;
@@ -324,6 +334,7 @@ export async function scrollToLoad(iframeDoc, stallTimeoutMs = 20000, viewerCfg 
         }
 
         lastCount = remaining.length;
+        lastTotal = total;
         await sleep(POLL_INTERVAL);
     }
 }

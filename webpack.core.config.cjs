@@ -6,8 +6,8 @@ const fs = require('fs');
 const METADATA_MAIN = `// ==UserScript==
 // @name         TokiSync (Link to Drive) [LAN Custom]
 // @namespace    local://lan/tokisync-custom
-// @version      1.20.5-custom.260531-8
-// @description  Toki series sites -> Google Drive syncing tool (Bundled) — LAN custom build (소설 연속 다운로드 ntk_blk 회피: 본문 호스트 shadow만 선택적 open, sbxh 탐지 probe는 닫힌 채로)
+// @version      1.20.5-custom.260531-9
+// @description  Toki series sites -> Google Drive syncing tool (Bundled) — LAN custom build (만화 이미지 2개만 받히는 문제 수정: scrollToLoad가 늦게 생성되는 img까지 개수 안정될 때까지 대기)
 // @author       pray4skylark + local patch
 // @match        *://*/*webtoon/*
 // @match        *://*/*novel/*
