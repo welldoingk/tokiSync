@@ -183,9 +183,14 @@
     async function refreshClients() {
         try {
             const data = await api('/clients');
+            const clients = data.clients || [];
             renderPool(data.pool || {});
-            renderClients(data.clients || []);
-            return data.pool || {};
+            renderClients(clients);
+            // lease 모드 클라이언트의 온라인/실행 상태 합산(상단 pill 반영용)
+            return {
+                anyOnline: clients.some((c) => c.online),
+                anyRunning: clients.some((c) => c.online && c.running),
+            };
         } catch (e) {
             // 구버전 서버(엔드포인트 없음)면 패널 숨김
             $('pool-panel').style.display = 'none';
@@ -194,20 +199,23 @@
     }
 
     async function refresh() {
+        let legacyOnline = false, legacyRunning = false;
         try {
             const data = await api('/queue');
             const report = data.report || {};
-            setPills(!!data.online, !!report.running);
+            legacyOnline = !!data.online;
+            legacyRunning = !!report.running;
             renderQueue(report);
             renderCaptcha(data.captcha);
             renderProgress(report, data.online);
             $('footer').textContent = `서버 시각 ${fmtTime(data.serverTime)} · seq ${data.seq}`;
             $('conn-info').textContent = `연결됨: ${getBase() || location.origin}`;
         } catch (e) {
-            setPills(false, false);
             $('footer').textContent = `연결 실패: ${e.message}`;
         }
-        refreshClients();
+        // 레거시(단일 모드) + lease(멀티-IP) 둘 중 하나라도 온라인이면 "온라인"으로 표시
+        const lease = await refreshClients();
+        setPills(legacyOnline || !!(lease && lease.anyOnline), legacyRunning || !!(lease && lease.anyRunning));
     }
 
     // 작업 투입 (/jobs)
