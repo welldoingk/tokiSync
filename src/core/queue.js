@@ -73,13 +73,18 @@ export function addUrls(text) {
 export function addLeasedUnits(units) {
     if (!Array.isArray(units) || units.length === 0) return 0;
     const q = getQueue();
-    const existing = new Set(q.map(i => pathKey(i.url)));
+    // unitId는 서버 권위 키 → 같은 unit 재주입 방지. pathKey 중복은 "아직 처리 안 끝난"(pending)
+    // 항목에 대해서만 차단한다(done/error 잔존 항목과 충돌해 재임대분을 영영 떨구는 lease-leak 방지).
+    const seenIds = new Set(q.filter(i => i.unitId).map(i => i.unitId));
+    const activeKeys = new Set(q.filter(i => i.status === 'pending').map(i => pathKey(i.url)));
     let added = 0;
     for (const u of units) {
         if (!u || !u.url || !/^https?:\/\//i.test(u.url)) continue;
+        if (u.id && seenIds.has(u.id)) continue;          // 동일 unit 이미 보유
         const k = pathKey(u.url);
-        if (existing.has(k)) continue;
-        existing.add(k);
+        if (activeKeys.has(k)) continue;                  // 미완 항목과 URL 충돌 → 중복 다운로드 방지
+        seenIds.add(u.id);
+        activeKeys.add(k);
         q.push({ url: u.url, title: u.label || '', status: 'pending', unitId: u.id });
         added++;
     }

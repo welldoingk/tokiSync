@@ -201,6 +201,7 @@ async function pollLease(cfg) {
     }
 
     // ② 임대 보충 — pending unit 수가 목표(leaseMax) 미만이면 부족분만큼 요청
+    let startAfter = false;
     const pendingUnits = getQueue().filter((i) => i.unitId && i.status === 'pending').length;
     if (pendingUnits < cfg.leaseMax) {
         const want = cfg.leaseMax - pendingUnits;
@@ -212,10 +213,9 @@ async function pollLease(cfg) {
             });
             const units = Array.isArray(res.units) ? res.units : [];
             const added = addLeasedUnits(units);
-            // 임대분이 생겼고 큐가 정지 상태면 시작(첫 pending으로 내비게이션 → 자동 다운로드 진입)
+            // 임대분이 생겼고 큐가 정지 상태면 시작 예약(내비게이션은 heartbeat 발사 후로 미룬다)
             if (added > 0 && !isRunning() && getQueue().some((i) => i.status === 'pending')) {
-                startQueue();
-                return; // startQueue는 내비게이션을 유발 → 이번 주기 종료
+                startAfter = true;
             }
         } catch (e) {
             const m = e && e.message ? e.message : '';
@@ -225,7 +225,8 @@ async function pollLease(cfg) {
         }
     }
 
-    // ③ heartbeat — clientId/외부IP/진행률/보유 unit 보고(서버가 보유 lease TTL 갱신)
+    // ③ heartbeat — clientId/외부IP/진행률/보유 unit 보고(서버가 해당 클라의 모든 leased unit TTL 갱신).
+    //    내비게이션(startQueue) 전에 반드시 발사 → 임대 직후 페이지 전환으로 lease가 굶지 않게 한다.
     const cur = getQueue();
     const current = cur.filter((i) => i.unitId && i.status === 'pending').map((i) => i.unitId);
     try {
@@ -248,6 +249,11 @@ async function pollLease(cfg) {
         if (/^HTTP [45]/.test(m)) {
             try { console.warn('[TokiSync-Remote] heartbeat 실패:', m); } catch {}
         }
+    }
+
+    // heartbeat가 끝난 뒤에야 큐를 시작(내비게이션 유발) → 이번 주기의 lease TTL 갱신이 항상 선행된다.
+    if (startAfter && !isRunning() && getQueue().some((i) => i.status === 'pending')) {
+        startQueue();
     }
 }
 
