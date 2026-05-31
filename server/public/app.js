@@ -226,6 +226,20 @@
         }
     }
 
+    // 작품 메인 URL 자동 펼침 (/jobs/expand)
+    async function submitExpand() {
+        const seriesUrl = $('exp-url').value.trim();
+        if (!/^https?:\/\//i.test(seriesUrl)) return toast('작품 메인 URL을 입력하세요');
+        try {
+            await api('/jobs/expand', { method: 'POST', body: { seriesUrl, series: $('job-series').value.trim() } });
+            $('exp-url').value = '';
+            toast('펼침 요청 전송 — 온라인 클라이언트가 회차를 투입합니다');
+            setTimeout(refresh, 1500);
+        } catch (e) {
+            toast('펼침 요청 실패: ' + e.message);
+        }
+    }
+
     // 범위 템플릿 → URL 목록 생성({n} 치환)
     function genFromTemplate() {
         const tpl = $('job-tpl').value.trim();
@@ -318,6 +332,7 @@
         };
         $('btn-save').onclick = saveSettings;
         $('btn-jobs').onclick = submitJobs;
+        $('btn-expand').onclick = submitExpand;
         $('btn-tpl-gen').onclick = genFromTemplate;
         $('btn-requeue-failed').onclick = () => requeueByStatus('failed', '실패');
         $('btn-requeue-stuck').onclick = () => requeueByStatus('leased', '진행 중');

@@ -188,9 +188,10 @@ async function handleApi(req, res, url) {
         const clientId = sanitizeClientId(body.clientId);
         if (clientId) {
             store.setClientReport(clientId, body, now(), config.leaseTtlMs);
-        } else {
-            store.setReport(body, now());
+            // 매 heartbeat 응답에 pending expand 요청을 실어 보냄 → 클라이언트가 회차를 펼친다.
+            return sendJson(res, 200, { ok: true, expansions: store.getExpansions(now()) });
         }
+        store.setReport(body, now());
         return sendJson(res, 200, { ok: true });
     }
 
@@ -225,6 +226,21 @@ async function handleApi(req, res, url) {
         const { added, skipped } = store.addUnits(series, urls, now());
         const { pool } = store.clients(now(), config.onlineWindowMs);
         return sendJson(res, 200, { ok: true, added, skipped, pool });
+    }
+
+    // POST /jobs/expand {seriesUrl, series} — 작품 메인 URL 자동 펼침 요청.
+    //   서버는 Cloudflare로 회차 목록을 못 받으므로, 요청만 보관 → 온라인 클라이언트가
+    //   브라우저에서 회차 목록을 추출해 /jobs 로 투입한다.
+    if (method === 'POST' && pathname === '/jobs/expand') {
+        const body = await parseBody(req, res);
+        if (body === null) return;
+        const seriesUrl = typeof body.seriesUrl === 'string' ? body.seriesUrl.trim() : '';
+        if (!/^https?:\/\//i.test(seriesUrl)) {
+            return sendJson(res, 400, { ok: false, error: 'valid seriesUrl required' });
+        }
+        const series = typeof body.series === 'string' ? body.series.slice(0, 200) : '';
+        const { id } = store.addExpansion(seriesUrl.slice(0, 500), series, now());
+        return sendJson(res, 200, { ok: true, id });
     }
 
     // GET /lease?clientId=X&max=N — pending unit 최대 N개를 원자적으로 임대
@@ -296,6 +312,7 @@ const server = http.createServer(async (req, res) => {
             pathname === '/progress' ||
             pathname === '/captcha' ||
             pathname === '/jobs' ||
+            pathname === '/jobs/expand' ||
             pathname === '/lease' ||
             pathname === '/complete' ||
             pathname === '/clients' ||

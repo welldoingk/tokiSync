@@ -34,8 +34,10 @@ import {
     CFG_REMOTE_CLIENT_ID,
     CFG_REMOTE_LEASE_MAX,
 } from './config.js';
+import { tokiAlert } from './ui.js';
 
 const K_LAST_SEQ = 'TOKI_REMOTE_LAST_SEQ';
+const K_DONE_EXP = 'TOKI_REMOTE_DONE_EXPANSIONS'; // 이미 처리한 expand 요청 id (중복 펼침 방지)
 
 let _timer = null;
 let _started = false;
@@ -53,8 +55,8 @@ function _sv(k, v) {
 
 function base(url) { return (url || '').replace(/\/+$/, ''); }
 
-/** GM_xmlhttpRequest 기반 JSON 요청 (Promise) */
-function gmRequest({ method, url, token, data }) {
+/** GM_xmlhttpRequest 기반 요청 (Promise). raw=true 면 응답 본문 문자열을 그대로 반환(HTML 등). */
+function gmRequest({ method, url, token, data, raw }) {
     return new Promise((resolve, reject) => {
         if (typeof GM_xmlhttpRequest === 'undefined') {
             reject(new Error('GM_xmlhttpRequest unavailable'));
@@ -65,10 +67,15 @@ function gmRequest({ method, url, token, data }) {
         GM_xmlhttpRequest({
             method,
             url,
-            headers,
+            headers: raw ? {} : headers,
             data: data ? JSON.stringify(data) : undefined,
-            timeout: 15000,
+            timeout: raw ? 25000 : 15000,
             onload: (r) => {
+                if (raw) {
+                    if (r.status >= 200 && r.status < 300) resolve(r.responseText || '');
+                    else reject(new Error(`HTTP ${r.status}`));
+                    return;
+                }
                 let j = {};
                 try { j = r.responseText ? JSON.parse(r.responseText) : {}; } catch {}
                 if (r.status >= 200 && r.status < 300) resolve(j);
@@ -78,6 +85,81 @@ function gmRequest({ method, url, token, data }) {
             ontimeout: () => reject(new Error('timeout')),
         });
     });
+}
+
+/**
+ * 작품 메인(목록) 페이지 문서에서 회차 URL들을 추출.
+ *   회차 URL 패턴 = 시리즈 경로 + "/숫자" (예: /manhwa/14 → /manhwa/14/1451, /novel/57328 → /novel/57328/503...).
+ *   사이트 룰 없이도 동작하는 범용 규칙. document 순서(=회차 순서) 보존, 중복 제거.
+ */
+function extractChapterUrls(doc, seriesUrl) {
+    let basePath, origin;
+    try { const u = new URL(seriesUrl); basePath = u.pathname.replace(/\/+$/, ''); origin = u.origin; }
+    catch { return []; }
+    if (!basePath) return [];
+    const re = new RegExp('^' + basePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/\\d+$');
+    const seen = new Set();
+    const out = [];
+    const anchors = doc.querySelectorAll('a[href]');
+    for (const a of anchors) {
+        const href = a.getAttribute('href');
+        if (!href) continue;
+        let abs, path;
+        try { const u = new URL(href, seriesUrl); abs = u.origin + u.pathname; path = u.pathname.replace(/\/+$/, ''); }
+        catch { continue; }
+        if (!re.test(path)) continue;
+        if (seen.has(abs)) continue;
+        seen.add(abs);
+        out.push(abs);
+    }
+    return out;
+}
+
+/** seriesUrl HTML을 받아(Cloudflare 쿠키 포함) 회차 URL 추출. */
+async function fetchChapterUrls(seriesUrl) {
+    const html = await gmRequest({ method: 'GET', url: seriesUrl, raw: true });
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    return extractChapterUrls(doc, seriesUrl);
+}
+
+/** 시리즈를 회차로 펼쳐 /jobs 에 투입. @returns {{added,skipped,count}} */
+async function expandSeriesToJobs(cfg, seriesUrl, series, urlsOverride) {
+    const urls = urlsOverride || await fetchChapterUrls(seriesUrl);
+    if (!urls.length) return { added: 0, skipped: 0, count: 0 };
+    const r = await gmRequest({
+        method: 'POST',
+        url: `${base(cfg.url)}/jobs`,
+        token: cfg.token,
+        data: { series: series || '', urls },
+    });
+    return { added: r.added || 0, skipped: r.skipped || 0, count: urls.length };
+}
+
+/** heartbeat 응답의 expand 요청들을 처리(이미 처리한 id는 건너뜀, 멱등). */
+async function processExpansions(cfg, expansions) {
+    if (!Array.isArray(expansions) || !expansions.length) return;
+    let done = {};
+    try { done = JSON.parse(_gv(K_DONE_EXP, '{}')) || {}; } catch {}
+    let changed = false;
+    for (const ex of expansions) {
+        if (!ex || !ex.id || done[ex.id] || !ex.seriesUrl) continue;
+        try {
+            const r = await expandSeriesToJobs(cfg, ex.seriesUrl, ex.series);
+            done[ex.id] = 1;
+            changed = true;
+            try { console.log(`[TokiSync-Remote] expand ${ex.seriesUrl} → 회차 ${r.count}개 (추가 ${r.added}, 중복 ${r.skipped})`); } catch {}
+        } catch (e) {
+            // 실패 시 done 미표시 → 다음 heartbeat 재시도(일시 오류 대응).
+            const m = e && e.message ? e.message : '';
+            try { console.warn('[TokiSync-Remote] expand 실패(재시도 예정):', ex.seriesUrl, m); } catch {}
+        }
+    }
+    if (changed) {
+        // done 맵 비대화 방지: 100개 초과 시 최근 50개만 유지.
+        const ids = Object.keys(done);
+        if (ids.length > 100) { const keep = ids.slice(-50); const nd = {}; for (const k of keep) nd[k] = 1; done = nd; }
+        _sv(K_DONE_EXP, JSON.stringify(done));
+    }
 }
 
 function applyCommand(cmd) {
@@ -229,8 +311,9 @@ async function pollLease(cfg) {
     //    내비게이션(startQueue) 전에 반드시 발사 → 임대 직후 페이지 전환으로 lease가 굶지 않게 한다.
     const cur = getQueue();
     const current = cur.filter((i) => i.unitId && i.status === 'pending').map((i) => i.unitId);
+    let hbRes = null;
     try {
-        await gmRequest({
+        hbRes = await gmRequest({
             method: 'POST',
             url: `${base(cfg.url)}/progress`,
             token: cfg.token,
@@ -249,6 +332,12 @@ async function pollLease(cfg) {
         if (/^HTTP [45]/.test(m)) {
             try { console.warn('[TokiSync-Remote] heartbeat 실패:', m); } catch {}
         }
+    }
+
+    // ④ 작품 자동 펼침 — heartbeat 응답의 expand 요청을 처리(Cloudflare 통과한 이 브라우저가
+    //    회차 목록을 받아 /jobs 로 투입). 멱등이라 다른 클라가 동시에 처리해도 중복은 흡수된다.
+    if (hbRes && Array.isArray(hbRes.expansions) && hbRes.expansions.length) {
+        try { await processExpansions(cfg, hbRes.expansions); } catch (e) {}
     }
 
     // heartbeat가 끝난 뒤에야 큐를 시작(내비게이션 유발) → 이번 주기의 lease TTL 갱신이 항상 선행된다.
@@ -313,8 +402,31 @@ export function registerRemoteMenu() {
     try {
         if (typeof GM_registerMenuCommand !== 'undefined' && window.self === window.top) {
             GM_registerMenuCommand('🌐 원격 제어 설정', openRemoteModal);
+            GM_registerMenuCommand('📤 이 작품 전체 회차 → 원격 풀 투입', onExpandCurrentSeries);
         }
     } catch {}
+}
+
+/** [버튼] 현재 작품(목록) 페이지의 전체 회차를 추출해 원격 lease 풀(/jobs)에 투입. */
+async function onExpandCurrentSeries() {
+    const cfg = getRemoteConfig();
+    if (!cfg.enabled || !cfg.url) {
+        tokiAlert('먼저 🌐 원격 제어 설정에서 컨트롤 API 주소/토큰을 설정하고 활성화하세요.');
+        return;
+    }
+    // 현재 페이지 DOM에서 직접 회차 추출(이미 Cloudflare 통과·렌더된 상태).
+    const urls = extractChapterUrls(document, location.href);
+    if (!urls.length) {
+        tokiAlert('이 페이지에서 회차 목록을 찾지 못했습니다.\n작품 메인(회차 목록) 페이지에서 실행하세요.');
+        return;
+    }
+    try {
+        const series = (document.title || '').replace(/\s*\|\s*뉴토끼.*$/, '').trim();
+        const r = await expandSeriesToJobs(cfg, location.href, series, urls);
+        tokiAlert(`📤 ${r.count}개 회차를 원격 풀에 투입했습니다.\n추가 ${r.added} · 중복 ${r.skipped} 제외\n각 클라이언트(프로필)가 나눠서 다운로드합니다.`);
+    } catch (e) {
+        tokiAlert('투입 실패: ' + (e && e.message ? e.message : e));
+    }
 }
 
 /** 원격 제어 설정 모달 (dsx-modal 스타일 재사용) */

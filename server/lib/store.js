@@ -22,6 +22,8 @@ import { normalizeUrlKey, urlLabel } from './util.js';
 
 const MAX_COMMANDS = 200;
 const MAX_CAPTCHA = 50;
+const MAX_EXPANSIONS = 20;               // 보관할 최근 expand 요청 수
+const EXPANSION_TTL_MS = 15 * 60 * 1000; // expand 요청 유효 시간(15분) — 이후 자동 만료
 const MAX_UNITS = 5000;                 // 작업 풀 상한 — 초과 시 오래된 done/failed부터 정리
 const MAX_ATTEMPTS = 3;                  // attempts 상한 도달 시 failed 격리(무한 재투입 방지)
 const DEFAULT_LEASE_TTL_MS = 120000;     // lease 기본 TTL(2분) — 만료 시 자동 pending 복귀
@@ -32,8 +34,10 @@ export class Store {
         this.state = {
             seq: 0,
             unitSeq: 0,
+            expSeq: 0,
             commands: [],
             units: [],
+            expansions: [], // 작품 메인 URL → 회차 자동 펼침 요청(클라이언트가 처리)
             report: { queue: [], running: false, progress: null, ts: 0 }, // 레거시 단일 슬롯(휘발성)
             reports: {}, // clientId → 리포트 맵(휘발성)
             captcha: [],
@@ -49,8 +53,10 @@ export class Store {
                 this.state = {
                     seq: Number(raw.seq) || 0,
                     unitSeq: Number(raw.unitSeq) || 0,
+                    expSeq: Number(raw.expSeq) || 0,
                     commands: Array.isArray(raw.commands) ? raw.commands : [],
                     units: Array.isArray(raw.units) ? raw.units : [],
+                    expansions: Array.isArray(raw.expansions) ? raw.expansions : [],
                     report: { queue: [], running: false, progress: null, ts: 0 },
                     reports: {},
                     captcha: Array.isArray(raw.captcha) ? raw.captcha : [],
@@ -74,10 +80,10 @@ export class Store {
         try {
             mkdirSync(dirname(this.dataFile), { recursive: true });
             // report/reports(휘발성)는 제외하고 저장
-            const { seq, unitSeq, commands, units, captcha } = this.state;
+            const { seq, unitSeq, expSeq, commands, units, expansions, captcha } = this.state;
             writeFileSync(
                 this.dataFile,
-                JSON.stringify({ seq, unitSeq, commands, units, captcha }, null, 2)
+                JSON.stringify({ seq, unitSeq, expSeq, commands, units, expansions, captcha }, null, 2)
             );
         } catch (e) {
             console.error('[store] persist failed:', e.message);
@@ -118,6 +124,28 @@ export class Store {
             this.state.captcha = this.state.captcha.slice(-MAX_CAPTCHA);
         }
         this._persist();
+    }
+
+    // ── 작품 자동 펼침(expand) — 메인 URL → 클라이언트가 회차 목록 추출해 /jobs 투입 ──
+    //   Cloudflare 때문에 서버는 회차 목록을 못 받으므로(403 challenge), 브라우저(클라이언트)가
+    //   처리한다. 서버는 요청만 보관하고 lease/progress 응답으로 클라이언트에 전달.
+
+    addExpansion(seriesUrl, series, now) {
+        const id = 'x' + (++this.state.expSeq);
+        this.state.expansions.push({ id, seriesUrl, series: series || '', ts: now });
+        if (this.state.expansions.length > MAX_EXPANSIONS) {
+            this.state.expansions = this.state.expansions.slice(-MAX_EXPANSIONS);
+        }
+        this._persist();
+        return { id };
+    }
+
+    /** 최근 만료 안 된 expand 요청(클라이언트가 멱등 처리하므로 TTL 내 중복 전달은 무해). */
+    getExpansions(now) {
+        const before = this.state.expansions.length;
+        this.state.expansions = this.state.expansions.filter((e) => now - e.ts < EXPANSION_TTL_MS);
+        if (this.state.expansions.length !== before) this._persist();
+        return this.state.expansions.map((e) => ({ id: e.id, seriesUrl: e.seriesUrl, series: e.series, ts: e.ts }));
     }
 
     snapshot(now, onlineWindowMs) {
