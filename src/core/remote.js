@@ -115,9 +115,23 @@ function extractChapterUrls(doc, seriesUrl) {
     return out;
 }
 
-/** seriesUrl HTML을 받아(Cloudflare 쿠키 포함) 회차 URL 추출. */
+/**
+ * seriesUrl HTML을 받아 회차 URL 추출.
+ *   ⚠️ GM_xmlhttpRequest 는 브라우저 지문이 부족해 Cloudflare 403 challenge 에 걸린다(실측).
+ *   → 페이지 내 window.fetch(credentials:'include') 를 우선 사용: same-origin 이고 cf_clearance
+ *     쿠키·브라우저 지문이 그대로 실려 Cloudflare 를 통과한다(실측: 200 + 회차 265개).
+ *   비-Cloudflare/cross-origin 사이트를 위해 실패 시 GM_xmlhttpRequest 로 폴백.
+ */
 async function fetchChapterUrls(seriesUrl) {
-    const html = await gmRequest({ method: 'GET', url: seriesUrl, raw: true });
+    let html = '';
+    try {
+        const r = await fetch(seriesUrl, { credentials: 'include' });
+        if (r.ok) html = await r.text();
+    } catch (e) { /* cross-origin(CORS) 등 → 폴백 */ }
+    if (!html || /just a moment|challenge-platform|cf-mitigated/i.test(html)) {
+        try { html = await gmRequest({ method: 'GET', url: seriesUrl, raw: true }); } catch (e) {}
+    }
+    if (!html) return [];
     const doc = new DOMParser().parseFromString(html, 'text/html');
     return extractChapterUrls(doc, seriesUrl);
 }

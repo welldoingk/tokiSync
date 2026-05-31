@@ -6,8 +6,8 @@ const fs = require('fs');
 const METADATA_MAIN = `// ==UserScript==
 // @name         TokiSync (Link to Drive) [LAN Custom]
 // @namespace    local://lan/tokisync-custom
-// @version      1.20.5-custom.260531-12
-// @description  Toki series sites -> Google Drive syncing tool (Bundled) — LAN custom build (작품 메인 URL 자동 펼침: 유저스크립트 버튼 + 대시보드 → 클라이언트가 전체 회차 추출해 lease 풀 투입)
+// @version      1.20.5-custom.260531-13
+// @description  Toki series sites -> Google Drive syncing tool (Bundled) — LAN custom build (자동 펼침 Cloudflare 우회: GM요청 대신 페이지 내 fetch로 시리즈 HTML 수신)
 // @author       pray4skylark + local patch
 // @match        *://*/*webtoon/*
 // @match        *://*/*novel/*
