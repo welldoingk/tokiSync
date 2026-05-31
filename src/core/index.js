@@ -96,18 +96,24 @@ import { scrollToLoad, fetchBlobWithXHR, blobToArrayBuffer, waitForContent, slee
         try { sessionStorage.setItem('mv_wf', '1'); } catch(e) {}
         console.log("🚀 [TokiSync-Worker] 자식 팝업 수동 대기 모드 기동");
 
-        // [추출용] 닫힌 Shadow DOM 강제 개방 — 워커에서만 설치 (읽기 탭 전역 설치 금지: 안티-변조 탐지 유발)
+        // [추출용] 닫힌 Shadow DOM 강제 개방 — 기본 OFF.
+        //   attachShadow Proxy 는 닫힌 shadow 를 강제 open 시키는데, 이는 사이트의 안티-변조
+        //   탐지(닫힌 shadow 생성 후 열렸는지 확인 = userscript_spoof)에 걸려 "워커 자신"이
+        //   차단됨(이미지 0 → 추출 실패). sbxh 등 대부분 사이트는 closed shadow 를 안 쓰므로 불필요.
+        //   컨텐츠를 closed shadow 로 숨기는 사이트에서만 GM_setValue('TOKI_FORCE_OPEN_SHADOW', true).
         try {
-            const originalAttachShadow = Element.prototype.attachShadow;
-            Element.prototype.attachShadow = new Proxy(originalAttachShadow, {
-                apply(target, thisArg, argumentsList) {
-                    if (argumentsList[0] && argumentsList[0].mode === 'closed') {
-                        console.log('[TokiSync-Worker] 🔒 닫힌 Shadow DOM 감지 -> Open 모드로 개방 완료');
-                        argumentsList[0].mode = 'open';
+            if (typeof GM_getValue !== 'undefined' && GM_getValue('TOKI_FORCE_OPEN_SHADOW', false)) {
+                const originalAttachShadow = Element.prototype.attachShadow;
+                Element.prototype.attachShadow = new Proxy(originalAttachShadow, {
+                    apply(target, thisArg, argumentsList) {
+                        if (argumentsList[0] && argumentsList[0].mode === 'closed') {
+                            console.log('[TokiSync-Worker] 🔒 닫힌 Shadow DOM 감지 -> Open 모드로 개방 완료');
+                            argumentsList[0].mode = 'open';
+                        }
+                        return Reflect.apply(target, thisArg, argumentsList);
                     }
-                    return Reflect.apply(target, thisArg, argumentsList);
-                }
-            });
+                });
+            }
         } catch (e) {}
 
         // window.opener 은폐 및 로컬 참조 복사

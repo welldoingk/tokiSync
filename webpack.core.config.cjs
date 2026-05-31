@@ -6,8 +6,8 @@ const fs = require('fs');
 const METADATA_MAIN = `// ==UserScript==
 // @name         TokiSync (Link to Drive) [LAN Custom]
 // @namespace    local://lan/tokisync-custom
-// @version      1.20.5-custom.260531-2
-// @description  Toki series sites -> Google Drive syncing tool (Bundled) — LAN custom build (FIX: attachShadow Proxy를 워커 전용으로 스코프 → sbxh 안티-변조 탐지 회피, 만화 로드 정상화)
+// @version      1.20.5-custom.260531-3
+// @description  Toki series sites -> Google Drive syncing tool (Bundled) — LAN custom build (FIX: attachShadow Proxy 기본 OFF(TOKI_FORCE_OPEN_SHADOW) → 읽기·다운로드 워커 모두 정상화)
 // @author       pray4skylark + local patch
 // @match        *://*/*webtoon/*
 // @match        *://*/*novel/*
