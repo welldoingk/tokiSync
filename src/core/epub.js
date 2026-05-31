@@ -1,3 +1,14 @@
+/** XML/XHTML 특수문자 이스케이프 — 미이스케이프 시 OPF/NCX/XHTML 파싱이 깨져
+ *  Kavita 등에서 메타데이터/본문이 잘못 읽힌다(한글 제목·본문의 & < > 등). */
+function xmlEsc(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+}
+
 export class EpubBuilder {
     constructor() {
         this.chapters = [];
@@ -5,14 +16,14 @@ export class EpubBuilder {
 
     addChapter(title, textContent) {
         // Simple text to HTML conversion
-        // Splits by newlines and wraps in <p>
+        // Splits by newlines and wraps in <p> (본문은 XML 이스케이프해 XHTML 깨짐 방지)
         const htmlContent = textContent
             .split('\n')
             .map(line => line.trim())
             .filter(line => line.length > 0)
-            .map(line => `<p>${line}</p>`)
+            .map(line => `<p>${xmlEsc(line)}</p>`)
             .join('\n');
-            
+
         this.chapters.push({ title, content: htmlContent });
     }
 
@@ -20,8 +31,16 @@ export class EpubBuilder {
         try {
             const zip = new JSZip();
             const title = metadata.title || "Unknown Title";
-            const author = metadata.author || "Unknown Author";
+            const author = metadata.author || metadata.writer || "Unknown Author";
             const uid = "urn:uuid:" + (crypto.randomUUID ? crypto.randomUUID() : Date.now());
+
+            // [Kavita] 시리즈 그룹핑 메타데이터 — calibre:series(시리즈명) + series_index(회차번호).
+            //   회차마다 series 가 동일해야 한 시리즈로 묶이고, series_index 로 정렬된다.
+            const series = metadata.series || "";
+            const _idxMatch = String(metadata.number == null ? '' : metadata.number).match(/\d+(?:\.\d+)?/);
+            const seriesIndex = _idxMatch ? String(parseFloat(_idxMatch[0])) : ""; // "0001"→"1", "0814화"→"814"
+            const summary = metadata.summary || "";
+            const tags = Array.isArray(metadata.tags) ? metadata.tags : (metadata.tags ? [metadata.tags] : []);
 
             // 1. mimetype (must be first, uncompressed)
             zip.file("mimetype", "application/epub+zip", { compression: "STORE" });
@@ -47,11 +66,11 @@ export class EpubBuilder {
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
-<title>${chapter.title}</title>
+<title>${xmlEsc(chapter.title)}</title>
 <link rel="stylesheet" type="text/css" href="styles.css"/>
 </head>
 <body>
-<h2>${chapter.title}</h2>
+<h2>${xmlEsc(chapter.title)}</h2>
 ${chapter.content}
 </body>
 </html>`;
@@ -68,7 +87,7 @@ ${chapter.content}
                 const href = `chapter_${i + 1}.xhtml`;
                 manifest += `<item id="${id}" href="${href}" media-type="application/xhtml+xml"/>\n`;
                 spine += `<itemref idref="${id}"/>\n`;
-                tocNav += `<navPoint id="${id}" playOrder="${i+1}"><navLabel><text>${c.title}</text></navLabel><content src="${href}"/></navPoint>\n`;
+                tocNav += `<navPoint id="${id}" playOrder="${i+1}"><navLabel><text>${xmlEsc(c.title)}</text></navLabel><content src="${href}"/></navPoint>\n`;
             });
             // Add NCX to manifest
             manifest += `<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>`;
@@ -76,11 +95,11 @@ ${chapter.content}
             const opf = `<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="2.0">
     <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
-        <dc:title>${title}</dc:title>
-        <dc:creator opf:role="aut">${author}</dc:creator>
+        <dc:title>${xmlEsc(title)}</dc:title>
+        <dc:creator opf:role="aut">${xmlEsc(author)}</dc:creator>
         <dc:language>ko</dc:language>
         <dc:identifier id="BookId">${uid}</dc:identifier>
-    </metadata>
+${summary ? `        <dc:description>${xmlEsc(summary)}</dc:description>\n` : ''}${tags.map(t => `        <dc:subject>${xmlEsc(t)}</dc:subject>`).join('\n')}${tags.length ? '\n' : ''}${series ? `        <meta name="calibre:series" content="${xmlEsc(series)}"/>\n` : ''}${series && seriesIndex ? `        <meta name="calibre:series_index" content="${xmlEsc(seriesIndex)}"/>\n` : ''}    </metadata>
     <manifest>
         ${manifest}
     </manifest>
@@ -101,7 +120,7 @@ ${chapter.content}
     <meta name="dtb:totalPageCount" content="0"/>
     <meta name="dtb:maxPageNumber" content="0"/>
 </head>
-<docTitle><text>${title}</text></docTitle>
+<docTitle><text>${xmlEsc(title)}</text></docTitle>
 ${tocNav}
 </navMap>
 </ncx>`;
