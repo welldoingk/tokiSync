@@ -19,6 +19,9 @@ export async function main() {
     
     const logger = LogBox.getInstance();
 
+    // [DIAG] 이등분 레벨: 3=히스토리/원격 동기화 포함, 4=UI(FAB) 포함
+    const __TD = (function () { try { var v = localStorage.getItem('__toki_diag'); return v == null ? 99 : (parseInt(v, 10) || 0); } catch (e) { return 99; } })();
+
     // -- 0. Core Logic starts after helper function definitions --
 
     // -- Helper Functions for Menu Actions --
@@ -284,8 +287,8 @@ export async function main() {
         }
     };
 
-    // -- 1. Initialize MenuModal --
-    new MenuModal({
+    // -- 1. Initialize MenuModal -- [DIAG 레벨4: UI(FAB) 주입]
+    if (__TD >= 4) new MenuModal({
         onDownload: () => {}, // Not used directly, specific methods below
         downloadAll: (forceOverwrite) => {
             const config = getConfig();
@@ -498,18 +501,18 @@ export async function main() {
         }
     });
 
-    // Initial load
+    // Initial load -- [DIAG 레벨3: 히스토리 동기화/파서/마킹 + 큐 + 원격]
     console.log('[TokiSync] Starting history sync...');
-    syncHistory();
+    if (__TD >= 3) syncHistory();
 
     // -- 다중 시리즈 자동 큐 --
-    registerQueueMenu();
+    if (__TD >= 3) registerQueueMenu();
     // 큐 실행 중이면: 현재 시리즈 전체 다운로드 후 다음 시리즈로 자동 이동 (저장된 정책 사용)
-    maybeRunQueue(() => tokiDownload(undefined, getConfig().policy, false));
+    if (__TD >= 3) maybeRunQueue(() => tokiDownload(undefined, getConfig().policy, false));
 
     // -- 원격 제어 (컨트롤 API 폴링) --
-    registerRemoteMenu();
-    startRemoteSync();
+    if (__TD >= 3) registerRemoteMenu();
+    if (__TD >= 3) startRemoteSync();
 
     // Cross-tab sync listener
     document.addEventListener("visibilitychange", () => {

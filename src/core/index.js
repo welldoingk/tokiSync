@@ -5,6 +5,11 @@ import { scrollToLoad, fetchBlobWithXHR, blobToArrayBuffer, waitForContent, slee
 (async function () {
     'use strict';
 
+    // [DIAG] 이등분 진단 게이트 — localStorage['__toki_diag'] (기본 99=풀동작).
+    //   0: 아무것도 안 함 | 1: document-start 패치만 | 2: +main(파서) | 3: +히스토리/원격 | 4: +UI(FAB)
+    const __TD = (function () { try { var v = localStorage.getItem('__toki_diag'); return v == null ? 99 : (parseInt(v, 10) || 0); } catch (e) { return 99; } })();
+    if (__TD < 1) return; // 레벨 0: 즉시 종료 (아무 패치/실행 없음)
+
     // =============================================================
     // 📝 [통합 로깅 시스템] localStorage 기반 부모-자식 통합 로그 캡처
     // =============================================================
@@ -68,20 +73,10 @@ import { scrollToLoad, fetchBlobWithXHR, blobToArrayBuffer, waitForContent, slee
 
 
     // =============================================================
-    // 🛡️ [보안 극복] 네이티브 함수 가로채기 (Proxy 기반 위장)
-    // =============================================================
-    const originalAttachShadow = Element.prototype.attachShadow;
-
-    Element.prototype.attachShadow = new Proxy(originalAttachShadow, {
-        apply(target, thisArg, argumentsList) {
-            if (argumentsList[0] && argumentsList[0].mode === 'closed') {
-                console.log('[TokiSync-Worker] 🔒 닫힌 Shadow DOM 감지 -> Open 모드로 개방 완료');
-                argumentsList[0].mode = 'open';
-            }
-            return Reflect.apply(target, thisArg, argumentsList);
-        }
-    });
-
+    // 🛡️ [보안 극복] attachShadow Proxy 는 워커(추출) 블록으로 이동됨 (아래 isWorkerPopup).
+    //   전역(document-start) 설치 시 닫힌 shadow 를 강제 open → 사이트 안티-변조 탐지
+    //   (userscript_spoof / prototype_tampered)에 걸려 광고 ack 차단 → 만화 로드 실패.
+    //   읽기 탭에선 불필요하므로 다운로드 워커에서만 설치한다.
     // =============================================================
     // 🚀 [자식 팝업 - Worker] 다형성 미디어 수집 및 부모 창 IPC 브릿지
     // =============================================================
@@ -100,7 +95,21 @@ import { scrollToLoad, fetchBlobWithXHR, blobToArrayBuffer, waitForContent, slee
         // 향후 location.replace 등으로 인한 컨텍스트 소실(짝수 회차 방어)을 대비해 현재 탭(세션)에 워커 각인
         try { sessionStorage.setItem('mv_wf', '1'); } catch(e) {}
         console.log("🚀 [TokiSync-Worker] 자식 팝업 수동 대기 모드 기동");
-        
+
+        // [추출용] 닫힌 Shadow DOM 강제 개방 — 워커에서만 설치 (읽기 탭 전역 설치 금지: 안티-변조 탐지 유발)
+        try {
+            const originalAttachShadow = Element.prototype.attachShadow;
+            Element.prototype.attachShadow = new Proxy(originalAttachShadow, {
+                apply(target, thisArg, argumentsList) {
+                    if (argumentsList[0] && argumentsList[0].mode === 'closed') {
+                        console.log('[TokiSync-Worker] 🔒 닫힌 Shadow DOM 감지 -> Open 모드로 개방 완료');
+                        argumentsList[0].mode = 'open';
+                    }
+                    return Reflect.apply(target, thisArg, argumentsList);
+                }
+            });
+        } catch (e) {}
+
         // window.opener 은폐 및 로컬 참조 복사
         const parentWin = window.opener;
         try {
@@ -510,9 +519,11 @@ import { scrollToLoad, fetchBlobWithXHR, blobToArrayBuffer, waitForContent, slee
         }, 500); // 500ms buffer for hydration to complete
     };
 
-    if (document.readyState === 'complete') {
-        startMain();
-    } else {
-        window.addEventListener('load', startMain);
+    if (__TD >= 2) { // 레벨 2+: main() 실행
+        if (document.readyState === 'complete') {
+            startMain();
+        } else {
+            window.addEventListener('load', startMain);
+        }
     }
 })();
