@@ -146,10 +146,18 @@ export class GenericParser extends BaseParser {
             return [];
         }
 
-        const items = Array.from(container.querySelectorAll(listCfg.item));
-        // Reverse if it's a typical episode list where latest is on top but we need chronological for some logic?
-        // Actually, TokiParser reverses. Let's check if we should always reverse.
-        // For now, return as is.
+        let items = Array.from(container.querySelectorAll(listCfg.item));
+        // [hardening] 컨테이너가 존재해도 항목이 아직 0개일 수 있다 — SPA 소프트 내비게이션·배경탭
+        // 타이머 스로틀로 SSR 목록의 DOM 파싱/하이드레이션이 파서 조회 순간 덜 끝난 경우.
+        // 그대로 반환하면 "에피소드 목록이 0개" 오탐 → 항목이 채워질 때까지(첫 item 출현) 대기한다.
+        if (items.length === 0 && listCfg.item) {
+            console.log(`[GenericParser] 컨테이너(${listCfg.container})는 있으나 항목 0개 → 목록 로딩 대기...`);
+            const firstItem = await this.waitForSelector(`${listCfg.container} ${listCfg.item}`, 8000);
+            if (firstItem) {
+                container = document.querySelector(listCfg.container) || container;
+                items = Array.from(container.querySelectorAll(listCfg.item));
+            }
+        }
         return items;
     }
 
