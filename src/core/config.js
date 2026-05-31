@@ -220,9 +220,9 @@ export function showConfigModal() {
             <div class="dsx-control-group">
                 <label class="dsx-label" style="display:flex;align-items:center;gap:8px;">
                     <input type="checkbox" id="dsx-cfg-force-shadow" ${config.forceOpenShadow ? 'checked' : ''}>
-                    닫힌 Shadow DOM 강제 열기 (소설 본문 추출용)
+                    닫힌 Shadow DOM 강제 열기 (모든 사이트 강제 ON)
                 </label>
-                <small style="opacity:.6">sbxh 등 소설이 닫힌 shadow로 본문을 숨기는 사이트에서만 켜세요. 만화는 끄세요(차단 위험).</small>
+                <small style="opacity:.6">소설(/novel/) 페이지는 자동으로 켜지므로 보통 끈 채로 두세요. URL이 /novel/이 아닌 소설 사이트에서만 수동으로 켜세요. (만화에서 강제 ON 시 차단 위험)</small>
             </div>
 
             <div class="dsx-section-title">Global Policies</div>

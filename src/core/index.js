@@ -96,13 +96,19 @@ import { scrollToLoad, fetchBlobWithXHR, blobToArrayBuffer, waitForContent, slee
         try { sessionStorage.setItem('mv_wf', '1'); } catch(e) {}
         console.log("🚀 [TokiSync-Worker] 자식 팝업 수동 대기 모드 기동");
 
-        // [추출용] 닫힌 Shadow DOM 강제 개방 — 기본 OFF.
-        //   attachShadow Proxy 는 닫힌 shadow 를 강제 open 시키는데, 이는 사이트의 안티-변조
-        //   탐지(닫힌 shadow 생성 후 열렸는지 확인 = userscript_spoof)에 걸려 "워커 자신"이
-        //   차단됨(이미지 0 → 추출 실패). sbxh 등 대부분 사이트는 closed shadow 를 안 쓰므로 불필요.
-        //   컨텐츠를 closed shadow 로 숨기는 사이트에서만 GM_setValue('TOKI_FORCE_OPEN_SHADOW', true).
+        // [추출용] 닫힌 Shadow DOM 강제 개방 — 콘텐츠 종류별 자동 분기.
+        //   attachShadow Proxy 는 닫힌 shadow 를 강제 open 시키는데, 만화 페이지에선 사이트의
+        //   안티-변조 탐지(userscript_spoof)에 걸려 워커가 ntk_blk 하드차단됨(이미지 0). 반면
+        //   sbxh 소설 본문은 닫힌 shadow 에 봉인돼 있어 force-open 없이는 추출 불가(실측: 소설
+        //   페이지에선 force-open 해도 ntk_blk 미발생).
+        //   → 워커 URL 이 소설(`/novel/`)일 때만 자동 ON, 만화(`/manhwa·/manga·/webtoon`)는 OFF.
+        //     수동 오버라이드: GM_setValue('TOKI_FORCE_OPEN_SHADOW', true) → 모든 사이트에서 강제 ON.
         try {
-            if (typeof GM_getValue !== 'undefined' && GM_getValue('TOKI_FORCE_OPEN_SHADOW', false)) {
+            const _urlIsNovel = /\/novel\//i.test(location.pathname);
+            const _gmForce = typeof GM_getValue !== 'undefined' &&
+                (GM_getValue('TOKI_FORCE_OPEN_SHADOW', false) === true ||
+                 GM_getValue('TOKI_FORCE_OPEN_SHADOW', false) === '1');
+            if (_urlIsNovel || _gmForce) {
                 const originalAttachShadow = Element.prototype.attachShadow;
                 Element.prototype.attachShadow = new Proxy(originalAttachShadow, {
                     apply(target, thisArg, argumentsList) {
