@@ -6,8 +6,8 @@ const fs = require('fs');
 const METADATA_MAIN = `// ==UserScript==
 // @name         TokiSync (Link to Drive) [LAN Custom]
 // @namespace    local://lan/tokisync-custom
-// @version      1.20.5-custom.260531-10
-// @description  Toki series sites -> Google Drive syncing tool (Bundled) — LAN custom build (소설 EPUB Kavita 메타데이터: calibre:series+series_index로 시리즈 그룹핑 + 전면 XML 이스케이프)
+// @version      1.20.5-custom.260531-11
+// @description  Toki series sites -> Google Drive syncing tool (Bundled) — LAN custom build (만화 이미지 2개만 받는 문제 수정: 광고-ack 스트립 시 SSR HTML에서 전체 이미지 복구)
 // @author       pray4skylark + local patch
 // @match        *://*/*webtoon/*
 // @match        *://*/*novel/*

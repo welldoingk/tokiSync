@@ -374,8 +374,46 @@ import { scrollToLoad, fetchBlobWithXHR, blobToArrayBuffer, waitForContent, slee
                             return urls;
                         };
 
+                        // SSR HTML 직접 추출 헬퍼 — 광고-ack 게이트로 렌더 DOM이 일부만 남는(예: 작은
+                        //   워커 팝업에서 sbxh가 이미지를 2개만 남기고 스트립) 상황 대비. 회차 HTML은
+                        //   같은 오리진이라 fetch 가능하고, 만화 이미지(board_uploads 등)는 SSR로 전체가
+                        //   박혀 있어 스트립과 무관하게 완전한 목록을 얻는다. DOMParser로 같은 컨테이너
+                        //   셀렉터를 적용해 광고/잡음을 구조적으로 배제한다.
+                        const extractImageUrlsFromHtml = async () => {
+                            try {
+                                const html = await fetch(location.href, { credentials: 'include' }).then(r => r.text());
+                                const doc = new DOMParser().parseFromString(html, 'text/html');
+                                let imageSelector = '.view-padding img, .viewer-main img, #v_content img, .img-tag, .vw-imgs img';
+                                if (viewerCfg.imageContainer) {
+                                    const itemSel = viewerCfg.imageItem || 'img';
+                                    imageSelector = viewerCfg.imageContainer.split(',').map(c => `${c.trim()} ${itemSel}`).join(', ');
+                                }
+                                const lazyAttrs = (Array.isArray(viewerCfg.lazyAttrOptions) && viewerCfg.lazyAttrOptions.length)
+                                    ? viewerCfg.lazyAttrOptions : ['data-src', 'data-lazy', 'src'];
+                                const raw = Array.from(doc.querySelectorAll(imageSelector)).map(img => {
+                                    for (const a of lazyAttrs) { const v = img.getAttribute(a); if (v) return v; }
+                                    return img.getAttribute('src') || '';
+                                }).filter(Boolean);
+                                const abs = raw
+                                    .map(u => { try { return new URL(u, location.href).href; } catch (e) { return u; } })
+                                    .filter(src => src && !/blank\.gif|loading\.gif|placeholder|1x1|spacer|data:image/i.test(src));
+                                return [...new Set(abs)];
+                            } catch (e) {
+                                console.warn('[TokiSync-Worker] SSR HTML 이미지 추출 실패:', e.message);
+                                return [];
+                            }
+                        };
+
                         // 4) 1차 추출 및 다운로드 실행
                         let finalImages = extractImageUrls();
+                        // [신규] SSR HTML 추출과 비교 — DOM이 더 적으면(광고-ack 스트립) 완전한 SSR 목록 사용.
+                        try {
+                            const htmlImages = await extractImageUrlsFromHtml();
+                            if (htmlImages.length > finalImages.length) {
+                                console.log(`🩹 [TokiSync-Worker] DOM ${finalImages.length}개 < SSR HTML ${htmlImages.length}개 → SSR 목록 사용(광고-ack 스트립 복구)`);
+                                finalImages = htmlImages;
+                            }
+                        } catch (e) {}
                         console.log(`🎯 [TokiSync-Worker] 1차 이미지 주소 ${finalImages.length}개 추출. 다운로드 개시...`);
                         let downloadedData = await runImageDownloads(finalImages);
 
@@ -390,8 +428,9 @@ import { scrollToLoad, fetchBlobWithXHR, blobToArrayBuffer, waitForContent, slee
                             // 2차 정밀 강제 징검다리 스크롤 기동 (15초)
                             await scrollToLoad(document, 15000, viewerCfg);
                             
-                            // 최종 재추출 및 2차 재다운로드 단행
+                            // 최종 재추출 및 2차 재다운로드 단행 (SSR 목록이 더 완전하면 그걸 사용)
                             finalImages = extractImageUrls();
+                            try { const h = await extractImageUrlsFromHtml(); if (h.length > finalImages.length) finalImages = h; } catch (e) {}
                             console.log(`🎯 [Deep Fallback] 2차 이미지 주소 ${finalImages.length}개 재추출. 최종 다운로드 재수행...`);
                             downloadedData = await runImageDownloads(finalImages);
                         }
