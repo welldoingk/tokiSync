@@ -55,3 +55,30 @@ export function normalizeUrls(input) {
     }
     return out;
 }
+
+/**
+ * unit 멱등 키 — trailing slash/대소문자 호스트 차이를 흡수해 같은 회차의 중복 enqueue를 막는다.
+ * (도메인 미러는 호스트가 다르면 별개로 본다 — 의도적으로 보수적. 같은 회차 중복 방지의 핵심은 호스트+경로.)
+ */
+export function normalizeUrlKey(url) {
+    const s = String(url).trim();
+    try {
+        const u = new URL(s);
+        const path = u.pathname.replace(/\/+$/, '');
+        return `${u.protocol}//${u.host.toLowerCase()}${path}${u.search}`;
+    } catch {
+        return s.replace(/\/+$/, '').toLowerCase();
+    }
+}
+
+/** unit 표시 라벨 — URL의 마지막 경로 세그먼트(없으면 호스트, 그래도 없으면 원본). */
+export function urlLabel(url) {
+    const s = String(url).trim();
+    try {
+        const u = new URL(s);
+        const segs = u.pathname.split('/').filter(Boolean);
+        return decodeURIComponent(segs[segs.length - 1] || u.host) || s;
+    } catch {
+        return s;
+    }
+}

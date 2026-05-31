@@ -38,6 +38,8 @@ function loadConfig() {
         host: process.env.HOST || cfg.host || '0.0.0.0',
         token: process.env.TOKI_API_TOKEN ?? cfg.token ?? '',
         onlineWindowMs: Number(cfg.onlineWindowMs || 30000),
+        leaseTtlMs: Number(cfg.leaseTtlMs || 120000), // lease 기본 TTL(2분) — 만료 시 자동 재투입
+        leaseMax: Number(cfg.leaseMax || 4),          // /lease max 미지정 시 기본 배정 수
         dataFile: cfg.dataFile
             ? join(__dirname, cfg.dataFile)
             : join(__dirname, 'data', 'state.json'),
@@ -64,6 +66,17 @@ function authed(req) {
     // 토큰은 헤더로만 받는다(URL 쿼리는 서버/프록시 로그·Referer에 노출되므로 미지원).
     const tok = h['x-toki-token'] || bearer || '';
     return safeEqual(tok, config.token);
+}
+
+/**
+ * clientId 정규화 — 신뢰 라벨(내부망 전제)이지만 키/로그 안전을 위해 화이트리스트 검증.
+ * 영문/숫자/._- 만 허용, 최대 64자. 부적합/빈값이면 '' 반환(레거시 단일모드로 폴백).
+ */
+function sanitizeClientId(raw) {
+    const s = String(raw == null ? '' : raw).trim();
+    if (!s) return '';
+    if (!/^[A-Za-z0-9._-]{1,64}$/.test(s)) return '';
+    return s;
 }
 
 /** POST 본문 파싱 — 실패 시 400 응답 후 null 반환 */
@@ -170,22 +183,91 @@ async function handleApi(req, res, url) {
     if (method === 'POST' && pathname === '/progress') {
         const body = await parseBody(req, res);
         if (body === null) return;
-        store.setReport(body, now());
+        // clientId가 있으면 멀티-IP lease 모드(클라별 리포트 + lease 갱신/heartbeat),
+        // 없으면 레거시 단일 슬롯 모드(하위호환).
+        const clientId = sanitizeClientId(body.clientId);
+        if (clientId) {
+            store.setClientReport(clientId, body, now(), config.leaseTtlMs);
+        } else {
+            store.setReport(body, now());
+        }
         return sendJson(res, 200, { ok: true });
     }
 
     if (method === 'POST' && pathname === '/captcha') {
         const body = await parseBody(req, res);
         if (body === null) return;
+        const clientId = sanitizeClientId(body.clientId);
+        // 캡차/차단 격리: 해당 클라가 보유한 lease를 즉시 재투입(다른 클라는 계속).
+        const requeued = clientId ? store.requeueClient(clientId, now()) : 0;
+        const who = clientId ? `[${clientId}] ` : '';
         const msg =
             (typeof body.message === 'string' && body.message.trim()
                 ? body.message.slice(0, 1000)
                 : '') || '⚠️ tokiSync 캡차 감지 — 원격에서 브라우저 확인 필요';
         const capUrl = typeof body.url === 'string' ? body.url.slice(0, 500) : '';
-        store.addCaptcha(msg, capUrl, now());
-        const text = `${msg}${capUrl ? '\n' + capUrl : ''}`;
+        store.addCaptcha(who + msg, capUrl, now());
+        const requeueNote = requeued ? `\n↩️ lease ${requeued}건 재투입` : '';
+        const text = `${who}${msg}${capUrl ? '\n' + capUrl : ''}${requeueNote}`;
         const tg = await telegram.notify(text, now());
-        return sendJson(res, 200, { ok: true, telegram: tg });
+        return sendJson(res, 200, { ok: true, telegram: tg, requeued });
+    }
+
+    // ── 멀티-IP lease 모드 엔드포인트 ────────────────────────────────────
+
+    // POST /jobs {series, urls[]} — 작업 enqueue(회차 unit으로 펼침, 멱등)
+    if (method === 'POST' && pathname === '/jobs') {
+        const body = await parseBody(req, res);
+        if (body === null) return;
+        const urls = normalizeUrls(body.urls);
+        if (!urls.length) return sendJson(res, 400, { ok: false, error: 'no valid urls' });
+        const series = typeof body.series === 'string' ? body.series.slice(0, 200) : '';
+        const { added, skipped } = store.addUnits(series, urls, now());
+        const { pool } = store.clients(now(), config.onlineWindowMs);
+        return sendJson(res, 200, { ok: true, added, skipped, pool });
+    }
+
+    // GET /lease?clientId=X&max=N — pending unit 최대 N개를 원자적으로 임대
+    if (method === 'GET' && pathname === '/lease') {
+        const clientId = sanitizeClientId(url.searchParams.get('clientId'));
+        if (!clientId) return sendJson(res, 400, { ok: false, error: 'clientId required' });
+        const maxRaw = Number(url.searchParams.get('max'));
+        const max = Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : config.leaseMax;
+        const units = store.lease(clientId, max, now(), config.leaseTtlMs);
+        return sendJson(res, 200, { ok: true, clientId, units, leaseTtlMs: config.leaseTtlMs });
+    }
+
+    // POST /complete {clientId, results:[{id, ok}]} — unit done/failed 처리
+    if (method === 'POST' && pathname === '/complete') {
+        const body = await parseBody(req, res);
+        if (body === null) return;
+        const clientId = sanitizeClientId(body.clientId);
+        if (!clientId) return sendJson(res, 400, { ok: false, error: 'clientId required' });
+        if (!Array.isArray(body.results)) {
+            return sendJson(res, 400, { ok: false, error: 'results[] required' });
+        }
+        const summary = store.complete(clientId, body.results, now());
+        return sendJson(res, 200, { ok: true, ...summary });
+    }
+
+    // GET /clients — 대시보드용: 클라이언트별 상태 + 풀 요약
+    if (method === 'GET' && pathname === '/clients') {
+        return sendJson(res, 200, { ok: true, ...store.clients(now(), config.onlineWindowMs) });
+    }
+
+    // GET /units?status=pending — unit 목록(대시보드 상세/디버그)
+    if (method === 'GET' && pathname === '/units') {
+        const status = url.searchParams.get('status') || '';
+        return sendJson(res, 200, { ok: true, units: store.listUnits(now(), status) });
+    }
+
+    // POST /requeue {ids:[]} — stuck lease/failed unit 강제 재투입(운영 버튼)
+    if (method === 'POST' && pathname === '/requeue') {
+        const body = await parseBody(req, res);
+        if (body === null) return;
+        if (!Array.isArray(body.ids)) return sendJson(res, 400, { ok: false, error: 'ids[] required' });
+        const requeued = store.requeueUnits(body.ids, now());
+        return sendJson(res, 200, { ok: true, requeued });
     }
 
     return sendJson(res, 404, { ok: false, error: 'not found' });
@@ -213,6 +295,12 @@ const server = http.createServer(async (req, res) => {
             pathname.startsWith('/queue/') ||
             pathname === '/progress' ||
             pathname === '/captcha' ||
+            pathname === '/jobs' ||
+            pathname === '/lease' ||
+            pathname === '/complete' ||
+            pathname === '/clients' ||
+            pathname === '/units' ||
+            pathname === '/requeue' ||
             pathname.startsWith('/api');
 
         if (isApi) return await handleApi(req, res, url);

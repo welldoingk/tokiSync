@@ -1,29 +1,44 @@
 /**
- * 상태 저장소 — 명령 로그(command log) + 유저스크립트 리포트 + 캡차 로그.
+ * 상태 저장소 — 명령 로그(command log) + 유저스크립트 리포트 + 캡차 로그 + 작업 풀(units/lease).
  *
- * 모델:
- *  - 대시보드가 명령(add/start/stop/clear/remove)을 append → 각 명령에 단조 증가 seq 부여.
- *  - 유저스크립트가 `GET /queue?since=<seq>` 폴링 → seq보다 큰 명령만 받아 적용.
- *  - 유저스크립트가 `POST /progress`로 로컬 큐/실행상태/진행률을 리포트(미러).
+ * 두 가지 운영 모드를 동시에 지원한다(하위호환):
+ *  1) 레거시 단일 클라 모드(`/queue` 명령 스트림):
+ *     - 대시보드가 명령(add/start/stop/clear/remove)을 append → 각 명령에 단조 증가 seq 부여.
+ *     - 유저스크립트가 `GET /queue?since=<seq>` 폴링 → seq보다 큰 명령만 받아 적용.
+ *     - 유저스크립트가 `POST /progress`로 로컬 큐/실행상태/진행률을 리포트(미러).
+ *  2) 멀티-IP lease 모드(`/jobs` `/lease` `/complete` `/clients`):
+ *     - 대시보드가 작업(회차 URL들)을 `units` 풀에 enqueue(멱등).
+ *     - 클라이언트(clientId)가 `/lease`로 pending unit을 원자적으로 임대(만료시각 부여).
+ *     - `/complete`로 done/failed 보고(실패→pending 재투입, attempts++, 상한 시 failed 격리).
+ *     - lease TTL 만료(클라 죽음/캡차/오프라인) → 자동 pending 복귀 → 다른 클라가 가져감.
  *  - 캡차 감지는 별도 로그 + 텔레그램 트리거.
  *
- * 디스크 영속화(JSON): 서버 재시작 후에도 상태 유지.
+ * 디스크 영속화(JSON): seq/unitSeq/commands/units/captcha만 저장(재시작 후 작업 풀 복원).
+ *  - report/reports(진행률 미러)는 휘발성 — 폴링 주기마다 재생성되므로 디스크에 쓰지 않는다.
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { normalizeUrlKey, urlLabel } from './util.js';
 
 const MAX_COMMANDS = 200;
 const MAX_CAPTCHA = 50;
+const MAX_UNITS = 5000;                 // 작업 풀 상한 — 초과 시 오래된 done/failed부터 정리
+const MAX_ATTEMPTS = 3;                  // attempts 상한 도달 시 failed 격리(무한 재투입 방지)
+const DEFAULT_LEASE_TTL_MS = 120000;     // lease 기본 TTL(2분) — 만료 시 자동 pending 복귀
 
 export class Store {
     constructor(dataFile) {
         this.dataFile = dataFile || '';
         this.state = {
             seq: 0,
+            unitSeq: 0,
             commands: [],
-            report: { queue: [], running: false, progress: null, ts: 0 },
+            units: [],
+            report: { queue: [], running: false, progress: null, ts: 0 }, // 레거시 단일 슬롯(휘발성)
+            reports: {}, // clientId → 리포트 맵(휘발성)
             captcha: [],
         };
+        this._unitKeys = new Set(); // 멱등 enqueue용 정규화 url 키 집합
         this._load();
     }
 
@@ -33,10 +48,21 @@ export class Store {
                 const raw = JSON.parse(readFileSync(this.dataFile, 'utf8'));
                 this.state = {
                     seq: Number(raw.seq) || 0,
+                    unitSeq: Number(raw.unitSeq) || 0,
                     commands: Array.isArray(raw.commands) ? raw.commands : [],
-                    report: raw.report || this.state.report,
+                    units: Array.isArray(raw.units) ? raw.units : [],
+                    report: { queue: [], running: false, progress: null, ts: 0 },
+                    reports: {},
                     captcha: Array.isArray(raw.captcha) ? raw.captcha : [],
                 };
+                // unitSeq 보정: 영속 데이터가 누락/손상돼도 id 충돌이 없도록 최대 id 기준 복원
+                let maxSeq = this.state.unitSeq;
+                for (const u of this.state.units) {
+                    if (u && u.key) this._unitKeys.add(u.key);
+                    const n = u && typeof u.id === 'string' ? parseInt(u.id.replace(/^u/, ''), 10) : 0;
+                    if (Number.isFinite(n) && n > maxSeq) maxSeq = n;
+                }
+                this.state.unitSeq = maxSeq;
             }
         } catch (e) {
             console.error('[store] load failed:', e.message);
@@ -47,11 +73,18 @@ export class Store {
         if (!this.dataFile) return;
         try {
             mkdirSync(dirname(this.dataFile), { recursive: true });
-            writeFileSync(this.dataFile, JSON.stringify(this.state, null, 2));
+            // report/reports(휘발성)는 제외하고 저장
+            const { seq, unitSeq, commands, units, captcha } = this.state;
+            writeFileSync(
+                this.dataFile,
+                JSON.stringify({ seq, unitSeq, commands, units, captcha }, null, 2)
+            );
         } catch (e) {
             console.error('[store] persist failed:', e.message);
         }
     }
+
+    // ── 레거시 단일 클라 모드 (명령 스트림) ───────────────────────────────
 
     addCommand(type, payload, now) {
         const seq = ++this.state.seq;
@@ -96,6 +129,267 @@ export class Store {
             captcha: this.state.captcha,
             online,
             serverTime: now,
+        };
+    }
+
+    // ── 멀티-IP lease 모드 (작업 풀) ─────────────────────────────────────
+
+    /**
+     * 작업 enqueue — urls를 unit으로 펼쳐 풀에 추가(정규화 url 키로 멱등).
+     * @returns {{added: number, skipped: number}}
+     */
+    addUnits(series, urls, now) {
+        let added = 0;
+        let skipped = 0;
+        for (const raw of urls) {
+            const url = String(raw).trim();
+            if (!url) continue;
+            const key = normalizeUrlKey(url);
+            if (this._unitKeys.has(key)) {
+                skipped++;
+                continue;
+            }
+            const id = `u${++this.state.unitSeq}`;
+            this.state.units.push({
+                id,
+                url,
+                key,
+                series: series || '',
+                label: urlLabel(url),
+                status: 'pending',
+                clientId: null,
+                leasedAt: 0,
+                expiresAt: 0,
+                attempts: 0,
+                ts: now,
+            });
+            this._unitKeys.add(key);
+            added++;
+        }
+        this._trimUnits();
+        if (added) this._persist();
+        return { added, skipped };
+    }
+
+    /** 풀 상한 초과 시 오래된 done/failed 종결 unit부터 제거(진행 중 unit은 보존). */
+    _trimUnits() {
+        if (this.state.units.length <= MAX_UNITS) return;
+        const terminal = (s) => s === 'done' || s === 'failed';
+        // 종결 unit을 오래된 순(ts 오름차순)으로 제거
+        const removable = this.state.units
+            .filter((u) => terminal(u.status))
+            .sort((a, b) => a.ts - b.ts);
+        let need = this.state.units.length - MAX_UNITS;
+        const drop = new Set();
+        for (const u of removable) {
+            if (need <= 0) break;
+            drop.add(u.id);
+            this._unitKeys.delete(u.key);
+            need--;
+        }
+        if (drop.size) this.state.units = this.state.units.filter((u) => !drop.has(u.id));
+    }
+
+    /**
+     * 만료된 lease 청소 — `now > expiresAt`인 leased unit을 pending 복귀(attempts++).
+     * attempts 상한 도달 시 failed 격리. 호출 시점(lease/complete/clients/heartbeat)마다 lazy 수행.
+     * @returns {boolean} 변경 여부
+     */
+    _expire(now) {
+        let changed = false;
+        for (const u of this.state.units) {
+            if (u.status === 'leased' && u.expiresAt > 0 && now > u.expiresAt) {
+                u.attempts++;
+                u.clientId = null;
+                u.leasedAt = 0;
+                u.expiresAt = 0;
+                u.status = u.attempts >= MAX_ATTEMPTS ? 'failed' : 'pending';
+                u.ts = now;
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    /**
+     * 임대 — pending unit 최대 max개를 원자적으로 clientId에 배정(만료시각 부여).
+     * Node 단일스레드 + 동기 처리이므로 핸들러 내 "pending 골라 leased 표시"가 자연히 원자적(락 불필요).
+     * @returns {Array} 임대된 unit들의 공개 표현
+     */
+    lease(clientId, max, now, ttlMs) {
+        const ttl = ttlMs || DEFAULT_LEASE_TTL_MS;
+        const limit = Math.max(0, Math.min(Number(max) || 0, 100));
+        this._expire(now);
+        // 클라이언트 presence 등록 — lease만 하고 아직 /progress를 안 보낸 클라도 대시보드에 즉시 표시.
+        // (휘발성 reports에 최소 엔트리 seed; 이후 /progress가 label/ip/progress를 채운다.)
+        if (clientId) {
+            const r = this.state.reports[clientId];
+            if (r) r.ts = now;
+            else this.state.reports[clientId] = {
+                label: clientId, ip: '', queue: [], running: false, progress: null, current: [], ts: now,
+            };
+        }
+        const out = [];
+        for (const u of this.state.units) {
+            if (out.length >= limit) break;
+            if (u.status === 'pending') {
+                u.status = 'leased';
+                u.clientId = clientId;
+                u.leasedAt = now;
+                u.expiresAt = now + ttl;
+                u.ts = now;
+                out.push(this._publicUnit(u));
+            }
+        }
+        if (out.length) this._persist();
+        return out;
+    }
+
+    /**
+     * 완료 보고 — results[{id, ok}]를 done/failed 처리.
+     * 실패(ok=false)→pending 재투입(attempts++), 상한 도달 시 failed 격리.
+     * 임대 주체(clientId)만 자신의 leased unit을 종결할 수 있다(내부망 전제, soft 검증).
+     * @returns {{done, requeued, failed, ignored}}
+     */
+    complete(clientId, results, now) {
+        const byId = new Map(this.state.units.map((u) => [u.id, u]));
+        const summary = { done: 0, requeued: 0, failed: 0, ignored: 0 };
+        for (const r of Array.isArray(results) ? results : []) {
+            const u = r && byId.get(r.id);
+            if (!u || u.status !== 'leased') {
+                summary.ignored++;
+                continue;
+            }
+            if (clientId && u.clientId && u.clientId !== clientId) {
+                summary.ignored++;
+                continue;
+            }
+            if (r.ok) {
+                u.status = 'done';
+                u.leasedAt = 0;
+                u.expiresAt = 0;
+                u.ts = now;
+                summary.done++;
+            } else {
+                u.attempts++;
+                u.clientId = null;
+                u.leasedAt = 0;
+                u.expiresAt = 0;
+                u.ts = now;
+                if (u.attempts >= MAX_ATTEMPTS) {
+                    u.status = 'failed';
+                    summary.failed++;
+                } else {
+                    u.status = 'pending';
+                    summary.requeued++;
+                }
+            }
+        }
+        if (summary.done || summary.requeued || summary.failed) this._persist();
+        return summary;
+    }
+
+    /**
+     * 클라이언트별 진행/생존 리포트(휘발성) + 보유 lease 갱신(heartbeat).
+     * lease 갱신은 expiresAt만 미루는 것이므로 디스크에 쓰지 않는다(재시작 시 만료→재투입은 안전한 실패).
+     */
+    setClientReport(clientId, report, now, ttlMs) {
+        this._expire(now);
+        this.state.reports[clientId] = {
+            label: report.label || clientId,
+            ip: report.ip || '',
+            queue: Array.isArray(report.queue) ? report.queue : [],
+            running: !!report.running,
+            progress: report.progress ?? null,
+            current: Array.isArray(report.current) ? report.current : [],
+            ts: now,
+        };
+        const ttl = ttlMs || DEFAULT_LEASE_TTL_MS;
+        for (const u of this.state.units) {
+            if (u.status === 'leased' && u.clientId === clientId) u.expiresAt = now + ttl;
+        }
+    }
+
+    /**
+     * 캡차/차단 격리 — 해당 클라이언트가 보유한 lease를 즉시 pending 재투입.
+     * 단위 실패가 아니라 클라이언트 차단이므로 attempts는 올리지 않는다.
+     * @returns {number} 재투입된 unit 수
+     */
+    requeueClient(clientId, now) {
+        let n = 0;
+        for (const u of this.state.units) {
+            if (u.status === 'leased' && u.clientId === clientId) {
+                u.status = 'pending';
+                u.clientId = null;
+                u.leasedAt = 0;
+                u.expiresAt = 0;
+                u.ts = now;
+                n++;
+            }
+        }
+        if (n) this._persist();
+        return n;
+    }
+
+    /** 특정 unit들을 강제 pending 재투입(대시보드 운영 버튼용 stuck lease 회수). */
+    requeueUnits(ids, now) {
+        const set = new Set(ids || []);
+        let n = 0;
+        for (const u of this.state.units) {
+            if (set.has(u.id) && (u.status === 'leased' || u.status === 'failed')) {
+                u.status = 'pending';
+                u.clientId = null;
+                u.leasedAt = 0;
+                u.expiresAt = 0;
+                u.ts = now;
+                n++;
+            }
+        }
+        if (n) this._persist();
+        return n;
+    }
+
+    /** 대시보드용: 풀 요약 + 클라이언트별 online/label/ip/current/진행률. */
+    clients(now, onlineWindowMs) {
+        this._expire(now);
+        const pool = { pending: 0, leased: 0, done: 0, failed: 0, total: this.state.units.length };
+        for (const u of this.state.units) {
+            if (pool[u.status] !== undefined) pool[u.status]++;
+        }
+        const clients = Object.entries(this.state.reports).map(([id, r]) => ({
+            clientId: id,
+            label: r.label,
+            ip: r.ip,
+            online: r.ts > 0 && now - r.ts < onlineWindowMs,
+            running: r.running,
+            progress: r.progress,
+            current: r.current,
+            leased: this.state.units.filter((u) => u.status === 'leased' && u.clientId === id).length,
+            ts: r.ts,
+        }));
+        return { pool, clients, serverTime: now };
+    }
+
+    /** unit 목록(대시보드 상세용, status 필터 옵션). */
+    listUnits(now, status) {
+        this._expire(now);
+        const src = status
+            ? this.state.units.filter((u) => u.status === status)
+            : this.state.units;
+        return src.map((u) => this._publicUnit(u));
+    }
+
+    _publicUnit(u) {
+        return {
+            id: u.id,
+            url: u.url,
+            series: u.series,
+            label: u.label,
+            status: u.status,
+            clientId: u.clientId,
+            expiresAt: u.expiresAt,
+            attempts: u.attempts,
+            ts: u.ts,
         };
     }
 }
