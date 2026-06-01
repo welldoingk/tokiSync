@@ -31,15 +31,27 @@ async function downloadSingleEpisode(destination = 'local', unit = null) {
     logger.show();
     logger.log('🚀 현재 회차 다운로드 시작...', 'System');
 
-    const siteInfo = await detectSite();
-    const parser = await ParserFactory.getParser();
-    if (!parser) throw new Error('파서를 찾을 수 없습니다.');
-
     // [멀티-IP lease 분기] unit.unitId 가 있으면 부모 탭은 회차 페이지로 이동하지 않는다(시리즈 목록 등에 고정).
     //   부모의 `document` 는 회차 페이지가 아니므로 extractEpisodeData(document,...) 로 메타 재추출 금지(엉뚱한 페이지).
     //   회차 메타는 시리즈 목록의 권위값(unit.series/num/title)을 그대로 쓰고, 본문은 워커 팝업이 unit.url 로 가서 수집.
     //   회차 URL 도 부모의 document.URL 이 아니라 반드시 unit.url 을 사용한다(부모는 회차에 안 가므로).
     const isLease = !!(unit && unit.unitId);
+
+    // 사이트 룰/파서 — lease 모드는 부모 페이지가 아니라 unit.url(회차) 기준으로 판정한다.
+    //   ⚠️ 부모가 만화 페이지에 고정된 채 소설 unit 을 처리하면 category=Manga 로 잡혀 소설을 이미지
+    //   추출(fetchComicImages)로 오처리 → "이미지 팝업 패키지 획득 불가" 실패 + 명명 깨짐.
+    //   unit.url 룰로 소설/만화를 정확히 분기(getParserForUrl 은 현재 location 무관).
+    let siteInfo = null, parser = null;
+    if (isLease && unit.url) {
+        parser = await ParserFactory.getParserForUrl(unit.url);
+        if (parser && parser.rule) {
+            let origin = ''; try { origin = new URL(unit.url).origin; } catch (e) {}
+            siteInfo = { site: 'generic', protocolDomain: origin, matchedRule: parser.rule, category: parser.rule.category || 'Webtoon' };
+        }
+    }
+    if (!siteInfo) siteInfo = await detectSite();
+    if (!parser) parser = await ParserFactory.getParser();
+    if (!parser) throw new Error('파서를 찾을 수 없습니다.');
 
     const metadata = isLease ? {} : await extractEpisodeData(document, parser, siteInfo, false);
     const seriesTitle = metadata.seriesTitle || (isLease ? (unit.series || 'Unknown_Series') : 'Unknown_Series');

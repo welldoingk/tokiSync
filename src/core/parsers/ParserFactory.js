@@ -1,5 +1,6 @@
 import { GenericParser } from './GenericParser.js';
 import { detectSite } from '../detector.js';
+import { RuleManager } from './RuleManager.js';
 import { getGlobalUrlExcludeList } from '../config.js';
 import { tokiAlert } from '../ui.js';
 
@@ -35,6 +36,23 @@ export class ParserFactory {
         }
 
         return null;
+    }
+
+    /**
+     * 특정 URL 에 매칭되는 룰로 파서 생성(현재 location 무관, 싱글톤 #instance 와 독립).
+     *   lease 모드/자동펼침처럼 "부모 페이지와 다른 카테고리(만화↔소설)"의 URL 을 처리할 때 사용.
+     *   부모가 만화 페이지에 고정된 채 소설 회차를 받아도 unit.url 기준으로 소설 룰을 정확히 선택한다.
+     * @returns {Promise<GenericParser|null>}
+     */
+    static async getParserForUrl(url) {
+        try {
+            const rule = await RuleManager.matchRule(url);
+            if (!rule) return null;
+            let origin = '';
+            try { origin = new URL(url).origin; } catch (e) {}
+            const ruleWithGlobal = ParserFactory._injectGlobalUrlExclude(rule);
+            return new GenericParser(origin, ruleWithGlobal);
+        } catch (e) { return null; }
     }
 
     static _injectGlobalUrlExclude(rule) {

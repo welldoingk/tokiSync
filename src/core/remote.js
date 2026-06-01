@@ -191,7 +191,10 @@ function seriesFolderFromDoc(doc, seriesUrl) {
 async function extractChapterItemsFromDoc(doc, seriesUrl) {
     try {
         if (!doc) return null;
-        const parser = await ParserFactory.getParser();
+        // seriesUrl 에 맞는 룰로 파서 생성(현재 클라가 다른 카테고리 페이지에 있어도 정확).
+        //   ⚠️ getParser()(현재 location) 를 쓰면 만화 페이지 클라가 소설을 펼칠 때 만화 셀렉터로
+        //   소설 목록을 파싱해 실패 → num/title/cover 누락(문자열 폴백). getParserForUrl 로 해결.
+        const parser = await ParserFactory.getParserForUrl(seriesUrl);
         const listCfg = parser && parser.rule && parser.rule.list;
         if (!listCfg || !listCfg.container || !listCfg.item || typeof parser.parseListItem !== 'function') return null;
         const container = doc.querySelector(listCfg.container);
