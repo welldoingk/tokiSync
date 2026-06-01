@@ -35,6 +35,8 @@ import {
     CFG_REMOTE_LEASE_MAX,
 } from './config.js';
 import { tokiAlert } from './ui.js';
+import { ParserFactory } from './parsers/ParserFactory.js';
+import { getCommonPrefix } from './utils.js';
 
 const K_LAST_SEQ = 'TOKI_REMOTE_LAST_SEQ';
 const K_DONE_EXP = 'TOKI_REMOTE_DONE_EXPANSIONS'; // 이미 처리한 expand 요청 id (중복 펼침 방지)
@@ -131,22 +133,55 @@ async function fetchChapterUrls(seriesUrl) {
     if (!html || /just a moment|challenge-platform|cf-mitigated/i.test(html)) {
         try { html = await gmRequest({ method: 'GET', url: seriesUrl, raw: true }); } catch (e) {}
     }
-    if (!html) return [];
+    if (!html) return { urls: [], doc: null };
     const doc = new DOMParser().parseFromString(html, 'text/html');
-    return extractChapterUrls(doc, seriesUrl);
+    return { urls: extractChapterUrls(doc, seriesUrl), doc };
 }
 
-/** 시리즈를 회차로 펼쳐 /jobs 에 투입. @returns {{added,skipped,count}} */
+/** 현재(라이브) 시리즈 페이지에서 정식 폴더명([id] 작품명) 계산 — bulk 다운로드와 동일 규칙(getFormattedTitle). */
+async function computeSeriesFolderLive() {
+    try {
+        const parser = await ParserFactory.getParser();
+        if (!parser || !parser.getFormattedTitle) return '';
+        const seriesId = parser.getSeriesId ? parser.getSeriesId() : '';
+        const list = (parser.getListItems ? await parser.getListItems() : []) || [];
+        if (!list.length) return '';
+        const first = parser.parseListItem(list[0]);
+        const last = parser.parseListItem(list[list.length - 1]);
+        return parser.getFormattedTitle(seriesId, first.title, last.title, getCommonPrefix) || '';
+    } catch (e) { return ''; }
+}
+
+/** 가져온 시리즈 HTML(doc)에서 best-effort 폴더명([id] 제목) — 자동 펼침용(라이브 파서 불가). */
+function seriesFolderFromDoc(doc, seriesUrl) {
+    let id = '';
+    try {
+        const m = new URL(seriesUrl).pathname.match(/\/(?:manhwa|manga|webtoon|novel|comic|toon)\/(\d+)/i);
+        if (m) id = m[1];
+    } catch (e) {}
+    let name = ((doc && doc.title) || '').replace(/\s*[|｜].*$/, '').trim();
+    const dash = name.split(/\s+-\s+/); // "작품명 - 작가" → 작품명
+    if (dash.length > 1) name = dash[0].trim();
+    if (!name) return '';
+    return id ? `[${id}] ${name}` : name;
+}
+
+/**
+ * 시리즈를 회차로 펼쳐 /jobs 에 투입(각 unit에 정식 폴더명 series 동봉).
+ * @param series 폴더명 오버라이드(버튼이 라이브 파서로 계산해 넘김). 없으면 가져온 doc에서 best-effort.
+ */
 async function expandSeriesToJobs(cfg, seriesUrl, series, urlsOverride) {
-    const urls = urlsOverride || await fetchChapterUrls(seriesUrl);
-    if (!urls.length) return { added: 0, skipped: 0, count: 0 };
+    let urls = urlsOverride, doc = null;
+    if (!urls) { const r = await fetchChapterUrls(seriesUrl); urls = r.urls; doc = r.doc; }
+    if (!urls || !urls.length) return { added: 0, skipped: 0, count: 0, folder: '' };
+    const folder = series || (doc ? seriesFolderFromDoc(doc, seriesUrl) : '');
     const r = await gmRequest({
         method: 'POST',
         url: `${base(cfg.url)}/jobs`,
         token: cfg.token,
-        data: { series: series || '', urls },
+        data: { series: folder || '', urls },
     });
-    return { added: r.added || 0, skipped: r.skipped || 0, count: urls.length };
+    return { added: r.added || 0, skipped: r.skipped || 0, count: urls.length, folder };
 }
 
 /** heartbeat 응답의 expand 요청들을 처리(이미 처리한 id는 건너뜀, 멱등). */
@@ -441,9 +476,10 @@ async function onExpandCurrentSeries() {
         return;
     }
     try {
-        const series = (document.title || '').replace(/\s*\|\s*뉴토끼.*$/, '').trim();
-        const r = await expandSeriesToJobs(cfg, location.href, series, urls);
-        tokiAlert(`📤 ${r.count}개 회차를 원격 풀에 투입했습니다.\n추가 ${r.added} · 중복 ${r.skipped} 제외\n각 클라이언트(프로필)가 나눠서 다운로드합니다.`);
+        // 라이브 파서로 정식 폴더명([id] 작품명) 계산 → 모든 회차가 같은 폴더(외전 포함)로 분류됨.
+        const folder = await computeSeriesFolderLive();
+        const r = await expandSeriesToJobs(cfg, location.href, folder, urls);
+        tokiAlert(`📤 ${r.count}개 회차를 원격 풀에 투입했습니다.\n폴더: ${r.folder || '(자동)'}\n추가 ${r.added} · 중복 ${r.skipped} 제외\n각 클라이언트(프로필)가 나눠서 다운로드합니다.`);
     } catch (e) {
         tokiAlert('투입 실패: ' + (e && e.message ? e.message : e));
     }

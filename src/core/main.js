@@ -26,7 +26,7 @@ function policyToDestination(policy) {
  *   멀티-IP(lease) 모드에서 회차 unit 을 받을 때, 전체 시리즈(tokiDownload)가 아니라
  *   "현재 회차만" 이 함수로 받는다(회차 페이지엔 목록이 없어 tokiDownload 는 0개 처리됨).
  */
-async function downloadSingleEpisode(destination = 'local') {
+async function downloadSingleEpisode(destination = 'local', unit = null) {
     const logger = LogBox.getInstance();
     logger.show();
     logger.log('🚀 현재 회차 다운로드 시작...', 'System');
@@ -39,6 +39,9 @@ async function downloadSingleEpisode(destination = 'local') {
     const title = metadata.episodeTitle || 'Current_Episode';
     const seriesTitle = metadata.seriesTitle || 'Unknown_Series';
     const seriesMeta = (typeof parser.getSeriesMetadata === 'function') ? parser.getSeriesMetadata() : {};
+    // 폴더명은 expand(메인 페이지)에서 계산한 정식값([id] 작품명)을 우선 — 회차마다/외전까지 일관.
+    //   회차 페이지에선 작품명 추출이 불안정하므로(외전 등) 이게 핵심.
+    const folderName = (unit && unit.series) || seriesTitle;
 
     const isNovel = (siteInfo.category === 'Novel' || siteInfo.category === 'novel');
     let builder;
@@ -63,8 +66,8 @@ async function downloadSingleEpisode(destination = 'local') {
     });
     const blob = await zip.generateAsync({ type: 'blob', compression: getCbzCompression() });
     const filename = `${tempItem.num} - ${title}`;
-    await saveFile(blob, filename, destination, extension, { category: siteInfo.category, folderName: seriesTitle });
-    logger.success('✅ 회차 다운로드 완료!', 'System');
+    await saveFile(blob, filename, destination, extension, { category: siteInfo.category, folderName });
+    logger.success(`✅ 회차 다운로드 완료! (${folderName}/${filename})`, 'System');
     return { num: tempItem.num, title };
 }
 
@@ -566,7 +569,7 @@ export async function main() {
     // 아니면(레거시: 시리즈 URL) 전체 시리즈 다운로드.
     if (__TD >= 3) maybeRunQueue((item) =>
         (item && item.unitId)
-            ? downloadSingleEpisode(policyToDestination(getConfig().policy))
+            ? downloadSingleEpisode(policyToDestination(getConfig().policy), item)
             : tokiDownload(undefined, getConfig().policy, false)
     );
 
