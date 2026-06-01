@@ -55,9 +55,12 @@ async function downloadSingleEpisode(destination = 'local', unit = null) {
 
     const metadata = isLease ? {} : await extractEpisodeData(document, parser, siteInfo, false);
     const seriesTitle = metadata.seriesTitle || (isLease ? (unit.series || 'Unknown_Series') : 'Unknown_Series');
-    // 시리즈 메타(작가/요약/태그/상태)는 파서가 제공할 때만 신뢰. lease 시 부모가 목록 페이지에 있어도
-    //   특정 작품을 가리키지 않을 수 있어 best-effort. 없으면 빈 메타(파일명/폴더명엔 영향 없음).
-    const seriesMeta = (typeof parser.getSeriesMetadata === 'function') ? (parser.getSeriesMetadata() || {}) : {};
+    // 시리즈 메타(작가/요약/태그/상태) — lease 모드는 expand 시 동봉한 unit.meta 를 우선 사용한다.
+    //   부모가 만화 페이지에 고정돼 있어 getSeriesMetadata()(전역 document)는 부정확하므로, unit.meta 가 정답.
+    //   unit.meta 없으면(구버전 투입분 등) 파서 폴백. 단일/벌크는 기존대로 현재 페이지 파서.
+    const seriesMeta = (isLease && unit && unit.meta && typeof unit.meta === 'object')
+        ? unit.meta
+        : ((typeof parser.getSeriesMetadata === 'function') ? (parser.getSeriesMetadata() || {}) : {});
     // 폴더명은 expand(메인 페이지)에서 계산한 정식값([id] 작품명)을 우선 — 회차마다/외전까지 일관.
     //   회차 페이지에선 작품명 추출이 불안정하므로(외전 등) 이게 핵심.
     const folderName = (unit && unit.series) || seriesTitle;

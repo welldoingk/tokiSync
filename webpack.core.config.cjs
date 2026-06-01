@@ -6,8 +6,8 @@ const fs = require('fs');
 const METADATA_MAIN = `// ==UserScript==
 // @name         TokiSync (Link to Drive) [LAN Custom]
 // @namespace    local://lan/tokisync-custom
-// @version      1.20.5-custom.260601-11
-// @description  Toki series sites -> Google Drive syncing tool (Bundled) — LAN custom build (heartbeat에 유저스크립트 버전 동봉 → 대시보드 클라 카드에 버전 표시·미업데이트 프로필 진단)
+// @version      1.20.5-custom.260601-12
+// @description  Toki series sites -> Google Drive syncing tool (Bundled) — LAN custom build (시리즈 메타(작가/소개/상태/태그)도 expand 시 unit 동봉 → 부모 페이지 무관 정확 메타)
 // @author       pray4skylark + local patch
 // @updateURL    http://192.168.0.100:8765/docs/tokiSync.user.js
 // @downloadURL  http://192.168.0.100:8765/docs/tokiSync.user.js

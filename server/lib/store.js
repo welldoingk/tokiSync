@@ -192,6 +192,12 @@ export class Store {
                 label: (isObj && raw.label) ? String(raw.label).slice(0, 200) : urlLabel(url),
                 num: (isObj && raw.num != null && raw.num !== '') ? String(raw.num).slice(0, 20) : '',
                 cover: (isObj && raw.cover) ? String(raw.cover).slice(0, 500) : '', // 표지 URL(시리즈 공통) — EPUB cover.jpg 용
+                meta: (isObj && raw.meta && typeof raw.meta === 'object') ? {     // 시리즈 메타(작가/소개/상태/태그) — 길이 제한
+                    author: String(raw.meta.author || '').slice(0, 200),
+                    summary: String(raw.meta.summary || '').slice(0, 2000),
+                    status: String(raw.meta.status || '').slice(0, 50),
+                    tags: Array.isArray(raw.meta.tags) ? raw.meta.tags.slice(0, 30).map((t) => String(t).slice(0, 50)) : [],
+                } : null,
                 status: 'pending',
                 clientId: null,
                 leasedAt: 0,
@@ -464,6 +470,7 @@ export class Store {
             label: u.label,
             num: u.num || '',
             cover: u.cover || '',
+            meta: u.meta || null,
             status: u.status,
             clientId: u.clientId,
             expiresAt: u.expiresAt,

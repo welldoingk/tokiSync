@@ -88,8 +88,8 @@ export function addLeasedUnits(units) {
         if (activeKeys.has(k)) continue;                  // 미완 항목과 URL 충돌 → 중복 다운로드 방지
         seenIds.add(u.id);
         activeKeys.add(k);
-        // series=정식 폴더명([id] 작품명), num/title=시리즈 목록의 권위 회차번호/제목, cover=표지 URL. 다운로드 시 사용.
-        q.push({ url: u.url, title: u.label || '', status: 'pending', unitId: u.id, series: u.series || '', num: u.num || '', cover: u.cover || '' });
+        // series=폴더명, num/title=권위 회차번호/제목, cover=표지 URL, meta=시리즈 메타(작가/소개/상태/태그). 다운로드 시 사용.
+        q.push({ url: u.url, title: u.label || '', status: 'pending', unitId: u.id, series: u.series || '', num: u.num || '', cover: u.cover || '', meta: u.meta || null });
         added++;
     }
     if (added) saveQueue(q);

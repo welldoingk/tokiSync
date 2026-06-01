@@ -217,6 +217,10 @@ async function extractChapterItemsFromDoc(doc, seriesUrl) {
             const t = (thumbCfg && typeof parser._extractValue === 'function') ? parser._extractValue(doc, thumbCfg) : '';
             if (t) cover = new URL(t, seriesUrl).href;
         } catch (e) {}
+        // [시리즈 메타] 작가/소개/상태/태그를 시리즈 doc 에서 1회 추출 → 모든 회차 unit 에 동봉.
+        //   getSeriesMetadata()는 전역 document 기반이라 부모(만화) 페이지를 보지만, doc 인자로 정확히 추출.
+        let seriesMeta = null;
+        try { seriesMeta = (typeof parser.getSeriesMetadata === 'function') ? parser.getSeriesMetadata(doc) : null; } catch (e) {}
         const seen = new Set();
         const out = [];
         for (const el of els) {
@@ -230,7 +234,7 @@ async function extractChapterItemsFromDoc(doc, seriesUrl) {
             catch (e) { continue; }
             if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
             seen.add(url);
-            out.push({ url, num: it.num || '', label: it.title || '', cover });
+            out.push({ url, num: it.num || '', label: it.title || '', cover, meta: seriesMeta });
         }
         return out.length ? out : null;
     } catch (e) { return null; }
@@ -556,9 +560,12 @@ async function onExpandCurrentSeries() {
         // [표지] 라이브 파서로 표지 URL 1회 추출 → 모든 회차 unit 에 동봉(Kavita cover.jpg).
         let cover = '';
         try { cover = (parser && typeof parser.getThumbnailUrl === 'function' && parser.getThumbnailUrl()) || ''; } catch (e) {}
+        // [시리즈 메타] 라이브 파서로 작가/소개/상태/태그 1회 추출(현재 작품 페이지) → 모든 회차 unit 에 동봉.
+        let seriesMeta = null;
+        try { seriesMeta = (parser && typeof parser.getSeriesMetadata === 'function') ? parser.getSeriesMetadata() : null; } catch (e) {}
         const list = (parser && parser.getListItems) ? (await parser.getListItems()) || [] : [];
         if (list.length && parser.parseListItem) {
-            items = list.map((li) => { const it = parser.parseListItem(li); return { url: it.src, num: it.num, label: it.title, cover }; })
+            items = list.map((li) => { const it = parser.parseListItem(li); return { url: it.src, num: it.num, label: it.title, cover, meta: seriesMeta }; })
                         .filter((u) => u.url && /^https?:\/\//i.test(u.url));
         }
     } catch (e) {}

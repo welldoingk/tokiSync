@@ -338,21 +338,23 @@ export class GenericParser extends BaseParser {
         return this._extractValue(document, meta.title);
     }
 
-    getSeriesMetadata() {
+    /** @param {Document} [root] 메타 추출 대상 문서. 생략 시 전역 document(현재 페이지).
+     *    멀티-IP 자동펼침은 부모 페이지가 아닌 fetch 한 시리즈 doc 을 넘겨 정확히 추출한다. */
+    getSeriesMetadata(root = document) {
         const meta = this.rule.meta || {};
         return {
-            author: this._extractValue(document, meta.author) || "",
-            status: this._extractValue(document, meta.status) || "연재중",
-            summary: this._extractValue(document, meta.summary) || "",
-            tags: this._extractTags(meta.tags)
+            author: this._extractValue(root, meta.author) || "",
+            status: this._extractValue(root, meta.status) || "연재중",
+            summary: this._extractValue(root, meta.summary) || "",
+            tags: this._extractTags(meta.tags, root)
         };
     }
 
     /** 장르 컨테이너에서 개별 태그 배열 추출 ("#판타지" 등 → ["판타지", ...]) */
-    _extractTags(selector) {
+    _extractTags(selector, root = document) {
         if (!selector) return [];
         const sel = typeof selector === 'string' ? selector : selector.selector;
-        const container = document.querySelector(sel);
+        const container = root.querySelector(sel);
         if (!container) return [];
         const links = container.querySelectorAll('a');
         const raw = links.length
