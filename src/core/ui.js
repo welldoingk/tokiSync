@@ -4,7 +4,7 @@
  */
 
 import { startSilentAudio, stopSilentAudio, isAudioRunning } from './anti_sleep.js';
-import { getConfig, setConfig } from './config.js';
+import { getConfig, setConfig, getRemoteConfig } from './config.js';
 import { ParserFactory } from './parsers/ParserFactory.js';
 import { RuleManager } from './parsers/RuleManager.js';
 import { GenericParser } from './parsers/GenericParser.js';
@@ -504,6 +504,49 @@ export class MenuModal {
                         </button>
                     </div>
 
+                    <div class="toki-section-title">NAS WebDAV</div>
+                    <div class="toki-control-group">
+                        <label class="toki-label">WebDAV URL</label>
+                        <input type="text" id="toki-sel-webdav-url" class="toki-input" placeholder="http://192.168.0.50:5005/books">
+                    </div>
+                    <div class="toki-control-group">
+                        <label class="toki-label">WebDAV 사용자</label>
+                        <input type="text" id="toki-sel-webdav-user" class="toki-input" placeholder="user">
+                    </div>
+                    <div class="toki-control-group">
+                        <label class="toki-label">WebDAV 비밀번호 (보안)</label>
+                        <input type="password" id="toki-sel-webdav-pass" class="toki-input" placeholder="••••">
+                    </div>
+
+                    <div class="toki-section-title">원격 제어 (멀티-IP)</div>
+                    <div class="toki-control-group">
+                        <label class="toki-label">
+                            <input type="checkbox" id="toki-sel-remote-enabled"> 원격 제어 활성화
+                        </label>
+                    </div>
+                    <div class="toki-control-group">
+                        <label class="toki-label">컨트롤 API URL</label>
+                        <input type="text" id="toki-sel-remote-url" class="toki-input" placeholder="http://192.168.0.100:8787">
+                    </div>
+                    <div class="toki-control-group">
+                        <label class="toki-label">API 토큰 (보안)</label>
+                        <input type="password" id="toki-sel-remote-token" class="toki-input" placeholder="open 모드면 비움">
+                    </div>
+                    <div class="toki-form-grid">
+                        <div class="toki-control-group">
+                            <label class="toki-label">폴링 주기 (초)</label>
+                            <input type="number" id="toki-sel-remote-poll" class="toki-input" min="2" placeholder="5">
+                        </div>
+                        <div class="toki-control-group">
+                            <label class="toki-label">동시 보유 작업수 (leaseMax)</label>
+                            <input type="number" id="toki-sel-remote-leasemax" class="toki-input" min="1" max="20" placeholder="2">
+                        </div>
+                    </div>
+                    <div class="toki-control-group">
+                        <label class="toki-label">클라이언트 ID</label>
+                        <input type="text" id="toki-sel-remote-clientid" class="toki-input" placeholder="A-direct / B-vpn">
+                    </div>
+
                     <div class="toki-control-group">
                         <label class="toki-label">로컬 파일명 템플릿</label>
                         <input type="text" id="toki-sel-nametemplate" class="toki-input" placeholder="{number} - {title}">
@@ -781,6 +824,15 @@ export class MenuModal {
         const selSmartSkip = doc.getElementById('toki-sel-smartskip');
         const selRemoteRule = doc.getElementById('toki-sel-remote-rule');
         const selCustomRule = doc.getElementById('toki-sel-custom-rule');
+        const selWebdavUrl = doc.getElementById('toki-sel-webdav-url');
+        const selWebdavUser = doc.getElementById('toki-sel-webdav-user');
+        const selWebdavPass = doc.getElementById('toki-sel-webdav-pass');
+        const selRemoteEnabled = doc.getElementById('toki-sel-remote-enabled');
+        const selRemoteUrl = doc.getElementById('toki-sel-remote-url');
+        const selRemoteToken = doc.getElementById('toki-sel-remote-token');
+        const selRemotePoll = doc.getElementById('toki-sel-remote-poll');
+        const selRemoteClientId = doc.getElementById('toki-sel-remote-clientid');
+        const selRemoteLeaseMax = doc.getElementById('toki-sel-remote-leasemax');
 
         if (this.handlers.getConfig) {
             const cfg = this.handlers.getConfig();
@@ -804,6 +856,17 @@ export class MenuModal {
             if (selSmartSkip) selSmartSkip.value = cfg.smartSkipRatio !== undefined ? String(cfg.smartSkipRatio) : '50';
             if (selRemoteRule) selRemoteRule.value = cfg.remoteRuleUrl || '';
             if (selCustomRule) selCustomRule.value = cfg.customRules || '';
+            if (selWebdavUrl) selWebdavUrl.value = cfg.webdavUrl || '';
+            if (selWebdavUser) selWebdavUser.value = cfg.webdavUser || '';
+            if (selWebdavPass) selWebdavPass.value = cfg.webdavPass || '';
+
+            const remoteCfg = getRemoteConfig();
+            if (selRemoteEnabled) selRemoteEnabled.checked = !!remoteCfg.enabled;
+            if (selRemoteUrl) selRemoteUrl.value = remoteCfg.url || '';
+            if (selRemoteToken) selRemoteToken.value = remoteCfg.token || '';
+            if (selRemotePoll) selRemotePoll.value = String(remoteCfg.pollSec);
+            if (selRemoteClientId) selRemoteClientId.value = remoteCfg.clientId || '';
+            if (selRemoteLeaseMax) selRemoteLeaseMax.value = String(remoteCfg.leaseMax);
         }
 
         if (selPolicy) {
@@ -813,6 +876,19 @@ export class MenuModal {
             };
             this.updateNativeHelper(doc, selPolicy.value);
         }
+
+        const saveCfg = (key, value) => {
+            if (this.handlers.setConfig) this.handlers.setConfig(key, value);
+        };
+        if (selWebdavUrl) selWebdavUrl.onchange = () => saveCfg('TOKI_WEBDAV_URL', selWebdavUrl.value.trim());
+        if (selWebdavUser) selWebdavUser.onchange = () => saveCfg('TOKI_WEBDAV_USER', selWebdavUser.value);
+        if (selWebdavPass) selWebdavPass.onchange = () => saveCfg('TOKI_WEBDAV_PASS', selWebdavPass.value);
+        if (selRemoteEnabled) selRemoteEnabled.onchange = () => saveCfg('TOKI_REMOTE_ENABLED', selRemoteEnabled.checked ? '1' : '0');
+        if (selRemoteUrl) selRemoteUrl.onchange = () => saveCfg('TOKI_REMOTE_API_URL', selRemoteUrl.value.trim());
+        if (selRemoteToken) selRemoteToken.onchange = () => saveCfg('TOKI_REMOTE_API_TOKEN', selRemoteToken.value);
+        if (selRemotePoll) selRemotePoll.onchange = () => saveCfg('TOKI_REMOTE_POLL_SEC', selRemotePoll.value);
+        if (selRemoteClientId) selRemoteClientId.onchange = () => saveCfg('TOKI_REMOTE_CLIENT_ID', selRemoteClientId.value.trim());
+        if (selRemoteLeaseMax) selRemoteLeaseMax.onchange = () => saveCfg('TOKI_REMOTE_LEASE_MAX', selRemoteLeaseMax.value);
 
         const testNativeBtn = doc.getElementById('toki-btn-test-native');
         if (testNativeBtn) {
