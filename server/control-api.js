@@ -188,8 +188,8 @@ async function handleApi(req, res, url) {
         const clientId = sanitizeClientId(body.clientId);
         if (clientId) {
             store.setClientReport(clientId, body, now(), config.leaseTtlMs);
-            // 매 heartbeat 응답에 pending expand 요청을 실어 보냄 → 클라이언트가 회차를 펼친다.
-            return sendJson(res, 200, { ok: true, expansions: store.getExpansions(now()) });
+            // heartbeat 응답: pending expand 요청 + 정지(paused) 상태 → 클라가 stopQueue.
+            return sendJson(res, 200, { ok: true, expansions: store.getExpansions(now()), paused: store.isPaused() });
         }
         store.setReport(body, now());
         return sendJson(res, 200, { ok: true });
@@ -243,6 +243,18 @@ async function handleApi(req, res, url) {
         return sendJson(res, 200, { ok: true, id });
     }
 
+    // POST /pause — 새 lease 중단(클라는 heartbeat의 paused로 stopQueue). POST /resume — 재개.
+    if (method === 'POST' && (pathname === '/pause' || pathname === '/resume')) {
+        store.setPaused(pathname === '/pause');
+        return sendJson(res, 200, { ok: true, paused: store.isPaused() });
+    }
+
+    // POST /jobs/clear — 작업 풀 전체 비우기(진행 중 포함 모든 unit 제거).
+    if (method === 'POST' && pathname === '/jobs/clear') {
+        store.clearUnits();
+        return sendJson(res, 200, { ok: true });
+    }
+
     // GET /lease?clientId=X&max=N — pending unit 최대 N개를 원자적으로 임대
     if (method === 'GET' && pathname === '/lease') {
         const clientId = sanitizeClientId(url.searchParams.get('clientId'));
@@ -266,9 +278,9 @@ async function handleApi(req, res, url) {
         return sendJson(res, 200, { ok: true, ...summary });
     }
 
-    // GET /clients — 대시보드용: 클라이언트별 상태 + 풀 요약
+    // GET /clients — 대시보드용: 클라이언트별 상태 + 풀 요약 + 정지 상태
     if (method === 'GET' && pathname === '/clients') {
-        return sendJson(res, 200, { ok: true, ...store.clients(now(), config.onlineWindowMs) });
+        return sendJson(res, 200, { ok: true, paused: store.isPaused(), ...store.clients(now(), config.onlineWindowMs) });
     }
 
     // GET /units?status=pending — unit 목록(대시보드 상세/디버그)
@@ -313,6 +325,9 @@ const server = http.createServer(async (req, res) => {
             pathname === '/captcha' ||
             pathname === '/jobs' ||
             pathname === '/jobs/expand' ||
+            pathname === '/jobs/clear' ||
+            pathname === '/pause' ||
+            pathname === '/resume' ||
             pathname === '/lease' ||
             pathname === '/complete' ||
             pathname === '/clients' ||

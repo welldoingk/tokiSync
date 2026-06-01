@@ -14,6 +14,60 @@ import { getCommonPrefix, blobToArrayBuffer, saveFile } from './utils.js';
 import { registerQueueMenu, maybeRunQueue } from './queue.js';
 import { registerRemoteMenu, startRemoteSync } from './remote.js';
 
+/** 정책 → 저장 대상(destination) 매핑 (downloader.js 규칙과 동일). */
+function policyToDestination(policy) {
+    if (policy === 'native') return 'native';
+    if (policy === 'drive' || policy === 'gasUpload') return 'drive';
+    return 'local'; // individual / zipOfCbzs / folderInCbz
+}
+
+/**
+ * 현재 페이지(회차 1개)만 다운로드. destination 으로 저장 대상 지정(기본 'local').
+ *   멀티-IP(lease) 모드에서 회차 unit 을 받을 때, 전체 시리즈(tokiDownload)가 아니라
+ *   "현재 회차만" 이 함수로 받는다(회차 페이지엔 목록이 없어 tokiDownload 는 0개 처리됨).
+ */
+async function downloadSingleEpisode(destination = 'local') {
+    const logger = LogBox.getInstance();
+    logger.show();
+    logger.log('🚀 현재 회차 다운로드 시작...', 'System');
+
+    const siteInfo = await detectSite();
+    const parser = await ParserFactory.getParser();
+    if (!parser) throw new Error('파서를 찾을 수 없습니다.');
+
+    const metadata = await extractEpisodeData(document, parser, siteInfo, false);
+    const title = metadata.episodeTitle || 'Current_Episode';
+    const seriesTitle = metadata.seriesTitle || 'Unknown_Series';
+    const seriesMeta = (typeof parser.getSeriesMetadata === 'function') ? parser.getSeriesMetadata() : {};
+
+    const isNovel = (siteInfo.category === 'Novel' || siteInfo.category === 'novel');
+    let builder;
+    let extension = 'cbz';
+    if (isNovel) {
+        const novelFormat = getConfig().novelFormat || 'epub';
+        builder = novelFormat === 'txt' ? new TxtBuilder() : new EpubBuilder();
+        extension = novelFormat;
+    } else {
+        builder = new CbzBuilder(title);
+    }
+
+    const tempItem = { title, src: document.URL, url: document.URL, num: metadata.episodeNum || '0000' };
+    await processItem(tempItem, builder, siteInfo, null, parser, seriesTitle, document);
+
+    logger.log('💾 파일 생성 및 저장 중...', 'System');
+    const zip = await builder.build({
+        series: seriesTitle, title, number: tempItem.num,
+        writer: seriesMeta.author || '', author: seriesMeta.author || '',
+        summary: seriesMeta.summary || '', status: seriesMeta.status || '',
+        tags: seriesMeta.tags || [], category: siteInfo.category,
+    });
+    const blob = await zip.generateAsync({ type: 'blob', compression: getCbzCompression() });
+    const filename = `${tempItem.num} - ${title}`;
+    await saveFile(blob, filename, destination, extension, { category: siteInfo.category, folderName: seriesTitle });
+    logger.success('✅ 회차 다운로드 완료!', 'System');
+    return { num: tempItem.num, title };
+}
+
 export async function main() {
     console.log("🚀 TokiDownloader Loaded (New Core v1.20.5)");
     
@@ -508,7 +562,13 @@ export async function main() {
     // -- 다중 시리즈 자동 큐 --
     if (__TD >= 3) registerQueueMenu();
     // 큐 실행 중이면: 현재 시리즈 전체 다운로드 후 다음 시리즈로 자동 이동 (저장된 정책 사용)
-    if (__TD >= 3) maybeRunQueue(() => tokiDownload(undefined, getConfig().policy, false));
+    // 큐 항목이 lease unit(unitId 있음=회차 1개)이면 "현재 회차만" 단일 다운로드,
+    // 아니면(레거시: 시리즈 URL) 전체 시리즈 다운로드.
+    if (__TD >= 3) maybeRunQueue((item) =>
+        (item && item.unitId)
+            ? downloadSingleEpisode(policyToDestination(getConfig().policy))
+            : tokiDownload(undefined, getConfig().policy, false)
+    );
 
     // -- 원격 제어 (컨트롤 API 폴링) --
     if (__TD >= 3) registerRemoteMenu();

@@ -348,6 +348,12 @@ async function pollLease(cfg) {
         }
     }
 
+    // ⑤ 정지(paused) — 서버가 정지 상태면 로컬 큐를 멈추고 이번 주기 종료(새 작업/시작 안 함).
+    if (hbRes && hbRes.paused) {
+        try { if (isRunning()) stopQueue(); } catch (e) {}
+        return;
+    }
+
     // ④ 작품 자동 펼침 — heartbeat 응답의 expand 요청을 처리(Cloudflare 통과한 이 브라우저가
     //    회차 목록을 받아 /jobs 로 투입). 멱등이라 다른 클라가 동시에 처리해도 중복은 흡수된다.
     if (hbRes && Array.isArray(hbRes.expansions) && hbRes.expansions.length) {

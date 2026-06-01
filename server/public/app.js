@@ -180,12 +180,19 @@
             .join('');
     }
 
+    let _paused = false;
     async function refreshClients() {
         try {
             const data = await api('/clients');
             const clients = data.clients || [];
             renderPool(data.pool || {});
             renderClients(clients);
+            // 정지 상태 반영 (버튼 라벨 + 배지)
+            _paused = !!data.paused;
+            const btn = $('btn-pause');
+            if (btn) { btn.textContent = _paused ? '▶️ 재개' : '⏸️ 전체 정지'; btn.className = _paused ? 'primary' : 'blue'; }
+            const badge = $('pause-badge');
+            if (badge) badge.textContent = _paused ? '⏸️ 정지됨' : '';
             // lease 모드 클라이언트의 온라인/실행 상태 합산(상단 pill 반영용)
             return {
                 anyOnline: clients.some((c) => c.online),
@@ -195,6 +202,29 @@
             // 구버전 서버(엔드포인트 없음)면 패널 숨김
             $('pool-panel').style.display = 'none';
             return null;
+        }
+    }
+
+    // 전체 정지 ↔ 재개 토글
+    async function togglePause() {
+        try {
+            await api(_paused ? '/resume' : '/pause', { method: 'POST' });
+            toast(_paused ? '재개됨' : '전체 정지됨 (새 작업 중단)');
+            refresh();
+        } catch (e) {
+            toast('실패: ' + e.message);
+        }
+    }
+
+    // 작업 풀 전체 비우기
+    async function clearPool() {
+        if (!confirm('작업 풀을 전부 비울까요? (진행 중 회차 포함 모두 제거)')) return;
+        try {
+            await api('/jobs/clear', { method: 'POST' });
+            toast('작업 풀 비움');
+            refresh();
+        } catch (e) {
+            toast('실패: ' + e.message);
         }
     }
 
@@ -344,6 +374,8 @@
         $('btn-tpl-gen').onclick = genFromTemplate;
         $('btn-requeue-failed').onclick = () => requeueByStatus('failed', '실패');
         $('btn-requeue-stuck').onclick = () => requeueByStatus('leased', '진행 중');
+        $('btn-pause').onclick = togglePause;
+        $('btn-clear-pool').onclick = clearPool;
         refresh();
         startPolling();
     }

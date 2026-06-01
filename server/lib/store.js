@@ -35,6 +35,7 @@ export class Store {
             seq: 0,
             unitSeq: 0,
             expSeq: 0,
+            paused: false, // true면 /lease가 빈 배열 반환(새 작업 중단), 클라는 stopQueue
             commands: [],
             units: [],
             expansions: [], // 작품 메인 URL → 회차 자동 펼침 요청(클라이언트가 처리)
@@ -54,6 +55,7 @@ export class Store {
                     seq: Number(raw.seq) || 0,
                     unitSeq: Number(raw.unitSeq) || 0,
                     expSeq: Number(raw.expSeq) || 0,
+                    paused: !!raw.paused,
                     commands: Array.isArray(raw.commands) ? raw.commands : [],
                     units: Array.isArray(raw.units) ? raw.units : [],
                     expansions: Array.isArray(raw.expansions) ? raw.expansions : [],
@@ -80,10 +82,10 @@ export class Store {
         try {
             mkdirSync(dirname(this.dataFile), { recursive: true });
             // report/reports(휘발성)는 제외하고 저장
-            const { seq, unitSeq, expSeq, commands, units, expansions, captcha } = this.state;
+            const { seq, unitSeq, expSeq, paused, commands, units, expansions, captcha } = this.state;
             writeFileSync(
                 this.dataFile,
-                JSON.stringify({ seq, unitSeq, expSeq, commands, units, expansions, captcha }, null, 2)
+                JSON.stringify({ seq, unitSeq, expSeq, paused, commands, units, expansions, captcha }, null, 2)
             );
         } catch (e) {
             console.error('[store] persist failed:', e.message);
@@ -244,7 +246,19 @@ export class Store {
      * Node 단일스레드 + 동기 처리이므로 핸들러 내 "pending 골라 leased 표시"가 자연히 원자적(락 불필요).
      * @returns {Array} 임대된 unit들의 공개 표현
      */
+    setPaused(b) { this.state.paused = !!b; this._persist(); }
+    isPaused() { return !!this.state.paused; }
+
+    /** 작업 풀 전체 비우기(pending/leased/done/failed 모두 제거). */
+    clearUnits() {
+        this.state.units = [];
+        this._unitKeys.clear();
+        this._persist();
+    }
+
     lease(clientId, max, now, ttlMs) {
+        // 정지 상태면 새 작업을 내주지 않는다(클라이언트 presence는 progress heartbeat로 유지됨).
+        if (this.state.paused) return [];
         const ttl = ttlMs || DEFAULT_LEASE_TTL_MS;
         const limit = Math.max(0, Math.min(Number(max) || 0, 100));
         this._expire(now);

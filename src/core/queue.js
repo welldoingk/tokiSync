@@ -154,7 +154,7 @@ export async function maybeRunQueue(downloadFn) {
     logger.log(`📋 큐 처리 ${pos}/${q.length}: ${location.href}`, 'Queue');
     _emitProgress({ phase: '다운로드 중', pos, total: q.length, url: location.href });
     try {
-        await downloadFn();
+        await downloadFn(active); // active 항목 전달 → lease unit(회차)이면 단일 회차 다운로드
         active.status = 'done';
         active.title = document.title || active.title;
         logger.success(`📋 큐 항목 완료 (${pos}/${q.length})`, 'Queue');

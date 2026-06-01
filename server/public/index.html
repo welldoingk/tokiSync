@@ -36,9 +36,13 @@
         </div>
 
         <div class="panel" id="pool-panel">
-            <h2>🌐 멀티-IP 작업 풀</h2>
+            <h2>🌐 멀티-IP 작업 풀 <span id="pause-badge"></span></h2>
             <div id="pool-bar" class="pool-bar"></div>
             <div id="pool-counts" class="pool-counts muted"></div>
+            <div class="row">
+                <button id="btn-pause" class="blue">⏸️ 전체 정지</button>
+                <button id="btn-clear-pool" class="danger">🗑️ 풀 비우기</button>
+            </div>
             <div class="row">
                 <button id="btn-requeue-failed" class="small">↩️ 실패분 재투입</button>
                 <button id="btn-requeue-stuck" class="small">🩹 멈춘 lease 재투입</button>
