@@ -360,6 +360,11 @@
                 const curLabel = cur ? ((cur.num ? cur.num + ' ' : '') + (cur.label || shortUrl(cur.url))) : '';
                 const curHtml = (c.online && curLabel)
                     ? `<div class="cc-current"><span class="ico">▶️</span>${esc(curLabel)}</div>` : '';
+                // 버전: 버전을 보내지 않는 클라(=구버전, 버전 동봉 코드 없음)는 "구버전" 경고로 표시.
+                const verShort = c.version ? (String(c.version).split('custom.').pop() || c.version) : '';
+                const verHtml = verShort
+                    ? `<span class="ver">v${esc(verShort)}</span>`
+                    : `<span class="ver old">⚠ 구버전</span>`;
                 return `<div class="client-card">
                     <div class="cc-head">
                         <span class="dot ${dot}"></span>
@@ -369,7 +374,7 @@
                     </div>
                     ${curHtml}
                     <div class="cc-meta muted">
-                        보유 ${c.leased || 0}건${phase ? ` · ${esc(phase)}` : ''} · ${c.online ? fmtTime(c.ts) : '오프라인'}
+                        보유 ${c.leased || 0}건${phase ? ` · ${esc(phase)}` : ''} · ${c.online ? fmtTime(c.ts) : '오프라인'} ${verHtml}
                     </div>
                 </div>`;
             })

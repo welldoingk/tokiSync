@@ -49,6 +49,12 @@ let _externalIp = '';   // 외부 IP(식별/검증용, 1회 조회 후 캐시)
 let _ipQueried = false;
 let _lastLogSeq = 0;    // 마지막으로 서버에 전송한 LogBox seq(로그 증분 전송 커서)
 
+/** 현재 유저스크립트 버전(GM_info) — 대시보드 클라 카드에 표시해 미업데이트 프로필을 즉시 식별. */
+function _scriptVersion() {
+    try { return (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || ''; }
+    catch (e) { return ''; }
+}
+
 /** LogBox 의 새 로그(마지막 전송 이후)를 증분 수집 — heartbeat 에 동봉해 대시보드로 스트림한다. */
 function _collectLogsSince() {
     try {
@@ -444,6 +450,7 @@ async function pollLease(cfg) {
                 progress: _lastProgress,
                 current,
                 logs: _collectLogsSince(), // 새 로그 증분 동봉(대시보드 실시간 로그 패널용)
+                version: _scriptVersion(), // 유저스크립트 버전(대시보드 클라 카드 표시 — 미업데이트 프로필 진단)
             },
         });
     } catch (e) {

@@ -367,6 +367,7 @@ export class Store {
             progress: report.progress ?? null,
             current: Array.isArray(report.current) ? report.current : [],
             logs,
+            version: typeof report.version === 'string' ? report.version.slice(0, 60) : '',
             ts: now,
         };
         const ttl = ttlMs || DEFAULT_LEASE_TTL_MS;
@@ -440,6 +441,7 @@ export class Store {
             progress: r.progress,
             current: r.current,
             leased: this.state.units.filter((u) => u.status === 'leased' && u.clientId === id).length,
+            version: r.version || '',
             ts: r.ts,
         }));
         return { pool, clients, serverTime: now };

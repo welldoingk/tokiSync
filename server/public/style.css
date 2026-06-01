@@ -350,3 +350,21 @@ body.light .log-stream { background: #14161b; }
 /* 단일 모드 접기(하단 강등) */
 #single-mode > summary { font-size: 14px; color: var(--text); font-weight: 600; padding: 2px 0; }
 .single-body { margin-top: 12px; }
+
+/* 클라이언트 버전 뱃지 */
+.client-card .ver {
+    display: inline-block;
+    font-size: 10.5px;
+    padding: 0 6px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    background: var(--panel);
+    white-space: nowrap;
+}
+.client-card .ver.old {
+    color: #fff;
+    background: var(--danger);
+    border-color: var(--danger);
+    font-weight: 600;
+}
