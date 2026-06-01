@@ -13,12 +13,12 @@
         logsel: 'toki.logsel',
     };
 
-    // 클라 버전 뱃지 기준 — 이 값 이상이면 최신(초록), 미만이면 구버전(빨강, 실제 버전 표기).
-    //   ⚠️ 빌드 시 docs 버전과 함께 갱신할 것. 버전 미전송 클라(260601-11 미만)는 버전을 모름.
-    const LATEST_CLIENT_VER = '260601-11';
+    // 클라 버전 뱃지 기준 — 서버 /clients 의 latestClientVersion(docs/tokiSync.user.js @version)으로
+    //   매 폴링마다 갱신된다. 아래는 서버값 수신 전 폴백(초기 1회용). 빌드하면 서버가 자동 최신값 제공.
+    let _latestVer = '260601-11';
     function _parseVer(v) { const m = String(v || '').match(/(\d{6})-(\d+)/); return m ? { d: +m[1], n: +m[2] } : null; }
     function _isOldVer(v) {
-        const c = _parseVer(v), L = _parseVer(LATEST_CLIENT_VER);
+        const c = _parseVer(v), L = _parseVer(_latestVer);
         if (!c || !L) return true;
         return c.d < L.d || (c.d === L.d && c.n < L.n);
     }
@@ -455,6 +455,7 @@
     async function refreshClients() {
         try {
             const data = await api('/clients');
+            if (data.latestClientVersion) _latestVer = data.latestClientVersion; // docs @version 자동 동기화
             const clients = data.clients || [];
             // 현재 처리 중인 회차 라벨 매핑용: leased unit을 clientId별로 묶는다(내부망, 가벼운 호출).
             try {

@@ -23,6 +23,21 @@ import { sendJson, readJsonBody, normalizeUrls } from './lib/util.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, 'public');
 
+// 빌드된 유저스크립트(docs/tokiSync.user.js)의 @version 을 읽어 대시보드 "최신 버전" 기준으로 제공.
+//   → 대시보드 LATEST 하드코딩 불필요(빌드만 하면 자동 동기화). mtime 캐시로 변경 시에만 재파싱.
+const DOCS_USERSCRIPT = join(__dirname, '..', 'docs', 'tokiSync.user.js');
+let _verCache = { v: '', mtime: 0 };
+function readLatestClientVersion() {
+    try {
+        const st = statSync(DOCS_USERSCRIPT);
+        if (_verCache.v && st.mtimeMs === _verCache.mtime) return _verCache.v;
+        const txt = readFileSync(DOCS_USERSCRIPT, 'utf8');
+        const m = txt.match(/@version\s+(\S+)/);
+        _verCache = { v: m ? m[1] : '', mtime: st.mtimeMs };
+        return _verCache.v;
+    } catch (e) { return ''; }
+}
+
 function loadConfig() {
     const file = join(__dirname, 'config.json');
     let cfg = {};
@@ -286,7 +301,7 @@ async function handleApi(req, res, url) {
 
     // GET /clients — 대시보드용: 클라이언트별 상태 + 풀 요약 + 정지 상태
     if (method === 'GET' && pathname === '/clients') {
-        return sendJson(res, 200, { ok: true, paused: store.isPaused(), ...store.clients(now(), config.onlineWindowMs) });
+        return sendJson(res, 200, { ok: true, paused: store.isPaused(), latestClientVersion: readLatestClientVersion(), ...store.clients(now(), config.onlineWindowMs) });
     }
 
     // GET /units?status=pending — unit 목록(대시보드 상세/디버그)
