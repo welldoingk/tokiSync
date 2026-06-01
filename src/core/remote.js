@@ -24,6 +24,7 @@ import {
     saveQueue,
     isRunning,
     pathKey,
+    runLeaseQueue,
 } from './queue.js';
 import {
     getRemoteConfig,
@@ -380,7 +381,6 @@ async function pollLease(cfg) {
     }
 
     // ② 임대 보충 — pending unit 수가 목표(leaseMax) 미만이면 부족분만큼 요청
-    let startAfter = false;
     const pendingUnits = getQueue().filter((i) => i.unitId && i.status === 'pending').length;
     if (pendingUnits < cfg.leaseMax) {
         const want = cfg.leaseMax - pendingUnits;
@@ -391,23 +391,13 @@ async function pollLease(cfg) {
                 token: cfg.token,
             });
             const units = Array.isArray(res.units) ? res.units : [];
-            const added = addLeasedUnits(units);
-            // 임대분이 생겼고 큐가 정지 상태면 시작 예약(내비게이션은 heartbeat 발사 후로 미룬다)
-            if (added > 0 && !isRunning() && getQueue().some((i) => i.status === 'pending')) {
-                startAfter = true;
-            }
+            addLeasedUnits(units); // 큐 주입만 — 실제 처리 가동은 heartbeat 뒤 runLeaseQueue(reload 없음)
         } catch (e) {
             const m = e && e.message ? e.message : '';
             if (/^HTTP [45]/.test(m)) {
                 try { console.warn('[TokiSync-Remote] lease 실패:', m); } catch {}
             }
         }
-    }
-    // lease 모드 in-place 처리(부모 고정)에서는 한 배치 종료 시 running=false 로 내려간다. 이때 보유 pending 이 남아 있으면
-    //   (이미 leaseMax 라 신규 added 가 0 이라도) 다음 배치를 위해 재시작이 필요하다 → added 여부와 무관하게 재개 트리거.
-    //   레거시 navigation 모드도 "pending 존재 + 정지" 면 동일하게 재시작(굶음 방지)하므로 의미가 보존된다.
-    if (!startAfter && !isRunning() && getQueue().some((i) => i.unitId && i.status === 'pending')) {
-        startAfter = true;
     }
 
     // ③ heartbeat — clientId/외부IP/진행률/보유 unit 보고(서버가 해당 클라의 모든 leased unit TTL 갱신).
@@ -449,9 +439,11 @@ async function pollLease(cfg) {
         try { await processExpansions(cfg, hbRes.expansions); } catch (e) {}
     }
 
-    // heartbeat가 끝난 뒤에야 큐를 시작(내비게이션 유발) → 이번 주기의 lease TTL 갱신이 항상 선행된다.
-    if (startAfter && !isRunning() && getQueue().some((i) => i.status === 'pending')) {
-        startQueue();
+    // heartbeat(=lease TTL 갱신)가 끝난 뒤, pending lease 가 있으면 부모 탭에서 직접 처리 루프를 가동한다.
+    //   reload/navigation 없이 runLeaseQueue 호출 — 이미 루프 중이면 재진입 가드(_leaseBusy)로 즉시 무시.
+    //   (paused 면 위 ⑤에서 이미 return 했으므로 여기 도달하지 않는다.)
+    if (getQueue().some((i) => i.unitId && i.status === 'pending')) {
+        runLeaseQueue();
     }
 }
 

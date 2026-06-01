@@ -15,6 +15,9 @@ const K_QUEUE = 'TOKI_QUEUE';
 const K_RUNNING = 'TOKI_QUEUE_RUNNING';
 
 let _ranThisLoad = false; // 한 페이지 로드에서 큐 처리 1회 보장
+let _leaseDownloadFn = null; // lease 다운로드 콜백 보관(remote 폴링이 reload 없이 재호출하기 위함)
+let _leaseBusy = false;      // runLeaseQueue 재진입 방지(중복 폴링 호출 흡수)
+const _sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** 원격 대시보드용 진행률 이벤트 방출(remote.js가 수신) */
 function _emitProgress(detail) {
@@ -104,11 +107,12 @@ export function startQueue() {
     if (pending.length === 0) { tokiAlert('큐에 대기 중인 항목이 없습니다.'); return; }
     setRunning(true);
     const first = pending[0];
-    // lease 모드: 부모 navigation 금지. 현재 페이지에 고정한 채 새로고침으로 maybeRunQueue in-place 처리 진입.
-    //   (이미 현재 페이지에서 호출됐다면 maybeRunQueue 가 같은 로드에서 곧장 처리 — reload 불필요할 수 있으나,
-    //    startQueue 는 보통 다른 컨텍스트(메뉴/리모트)에서 호출되므로 안전하게 reload 로 진입 보장.)
+    // lease 모드: 부모 navigation/새로고침 금지. 현재 페이지에 고정한 채 runLeaseQueue 처리 루프를 직접 가동.
+    //   downloadFn 이 등록돼 있으면(거의 항상 — main()의 maybeRunQueue가 먼저 등록) reload 없이 즉시 처리.
+    //   미등록(스크립트 초기화 직후 등 예외)일 때만 reload 로 main 재진입(이후엔 등록되어 reload 불필요).
     if (first.unitId) {
-        location.reload();
+        if (_leaseDownloadFn) runLeaseQueue();
+        else location.reload();
         return;
     }
     if (pathKey(first.url) === pathKey(location.href)) {
@@ -133,6 +137,9 @@ export function stopQueue() {
 export async function maybeRunQueue(downloadFn) {
     if (_ranThisLoad) return;
     if (window.self !== window.top) return;       // iframe 안에서는 동작 금지
+    // top 컨텍스트에서 lease 다운로드 콜백을 보관 — 이후 remote.js 폴링이 reload 없이 runLeaseQueue 를
+    //   인자 없이 재호출할 수 있게 한다(isRunning 여부와 무관하게 등록해야 첫 시작도 폴링이 가동 가능).
+    if (downloadFn) _leaseDownloadFn = downloadFn;
     if (!isRunning()) return;
     _ranThisLoad = true;
 
@@ -201,69 +208,61 @@ export async function maybeRunQueue(downloadFn) {
 }
 
 /**
- * [멀티-IP lease 전용] 부모 탭을 고정한 채 현재 보유한 pending lease unit 들을 순차 처리.
+ * [멀티-IP lease 전용] 부모 탭을 고정한 채 pending lease unit 을 **reload 없이** 연속 처리하는 루프.
  *   각 unit 은 downloadFn(item) 으로 다운로드 — downloadSingleEpisode 가 unit.url(회차)로 워커 팝업만 띄워
  *   본문을 수집하고, 메타는 unit 의 권위값(series/num/title)을 그대로 쓴다. 부모는 회차로 navigate 하지 않는다.
- *   완료/실패는 GM 큐에 마킹(remote.js 가 /complete 보고 후 제거) — navigation 경로의 마킹 규칙과 동일.
- *   이 호출은 "현재 스냅샷의 lease unit"만 처리하고 반환한다. 다음 배치는 remote.js 의 폴링(lease 보충 + reload)이 가져온다.
- * @param {(item:any)=>Promise<any>} downloadFn 큐 항목 1개를 받아 다운로드(예: (item)=> item.unitId ? downloadSingleEpisode(...) : ...)
+ *   설계: 한 번 진입하면 pending 이 소진되거나 정지될 때까지 같은 컨텍스트에서 계속 돈다.
+ *     새 lease 는 remote.js 폴링(setInterval)이 백그라운드로 보충 → 다음 루프 이터레이션이 집어간다.
+ *     → 회차마다/배치마다 부모 탭을 새로고침하던 동작 제거(사용자 체감: 같은 페이지가 계속 reload 되는 문제 해결).
+ *   재진입 가드(_leaseBusy): 폴링이 매 주기 호출해도 이미 루프 중이면 즉시 반환(중복 실행 방지).
+ *   downloadFn 보관(_leaseDownloadFn): main()의 maybeRunQueue 가 1회 등록하면 이후 폴링/메뉴가 인자 없이 재호출 가능.
+ * @param {(item:any)=>Promise<any>} [downloadFn] 큐 항목 1개 다운로드. 생략 시 보관된 콜백 사용.
  */
 export async function runLeaseQueue(downloadFn) {
+    downloadFn = downloadFn || _leaseDownloadFn;
+    if (downloadFn) _leaseDownloadFn = downloadFn;     // 폴링/메뉴의 인자 없는 재호출용 보관
+    if (!downloadFn) return;
+    if (_leaseBusy) return;                            // 이미 루프 중 → 중복 폴링 호출 흡수
+    _leaseBusy = true;
+    setRunning(true);
     const logger = LogBox.getInstance();
     logger.show();
-
-    // 이번 호출에서 처리할 대상: 현재 pending 상태의 lease unit 들의 unitId 스냅샷(처리 중 큐 변동에 견고).
-    const targetIds = getQueue()
-        .filter(i => i.unitId && i.status === 'pending')
-        .map(i => i.unitId);
-    if (targetIds.length === 0) return;
-
-    for (const unitId of targetIds) {
-        // 매 반복마다 최신 큐를 읽어 해당 unit 의 현재 상태를 확인(remote.js 가 동시 갱신할 수 있음).
-        let q = getQueue();
-        const idx = q.findIndex(i => i.unitId === unitId);
-        if (idx < 0) continue;                         // 이미 제거됨(완료 보고 등)
-        const item = q[idx];
-        if (item.status !== 'pending') continue;       // 이미 처리됨
-
-        // 서버가 전체 정지(paused)를 내리면 remote.js 가 setRunning(false) 처리 → 즉시 중단.
-        if (!isRunning()) {
-            logger.log('⏸️ lease 처리 중단(정지 감지)', 'Queue');
-            return;
+    let idle = 0;
+    try {
+        while (isRunning()) {                          // 정지(paused→stopQueue) 시 isRunning()=false 로 루프 종료
+            const q = getQueue();
+            const item = q.find((i) => i.unitId && i.status === 'pending');
+            if (!item) {
+                // pending 이 잠시 빔(폴링 보충 대기). 짧게 쉬고 재확인, 일정 시간 계속 비면 배치 종료
+                //   (폴링이 새 lease 를 받으면 _leaseBusy 해제 후 다시 이 루프를 호출해 깨운다 — reload 불필요).
+                if (++idle >= 4) break;
+                await _sleep(1500);
+                continue;
+            }
+            idle = 0;
+            const pos = q.filter((i) => i.status !== 'pending').length + 1;
+            logger.log(`📋 lease 처리 ${pos}/${q.length}: ${item.url}`, 'Queue');
+            _emitProgress({ phase: '다운로드 중', pos, total: q.length, url: item.url });
+            try {
+                await downloadFn(item);                // 회차 1개 = 워커 팝업 단일 다운로드
+                item.status = 'done';
+                // ⚠️ 부모는 회차 페이지가 아니므로 document.title 로 덮어쓰지 않는다(목록 제목 오염 방지). 권위 라벨 보존.
+                logger.success(`📋 lease 항목 완료 (${pos}/${q.length})`, 'Queue');
+                _emitProgress({ phase: '항목 완료', pos, total: q.length, url: item.url });
+            } catch (e) {
+                item.status = 'error';
+                item.error = e && e.message ? e.message : String(e);
+                logger.error(`📋 lease 항목 실패: ${item.error}`, 'Queue');
+                _emitProgress({ phase: '항목 실패', pos, total: q.length, url: item.url, error: item.error });
+            }
+            // 최신 큐에 반영(폴링이 동시 갱신했어도 해당 unitId 만 갱신해 타 항목/순서 보존)
+            const q2 = getQueue();
+            const wi = q2.findIndex((i) => i.unitId === item.unitId);
+            if (wi >= 0) { q2[wi] = item; saveQueue(q2); }
         }
-
-        const done = q.filter(i => i.status !== 'pending').length;
-        const pos = done + 1;
-        logger.log(`📋 lease 처리 ${pos}/${q.length}: ${item.url}`, 'Queue');
-        _emitProgress({ phase: '다운로드 중', pos, total: q.length, url: item.url });
-        try {
-            await downloadFn(item);                    // unit.unitId 존재 → downloadSingleEpisode(회차 1개, 워커 팝업)
-            item.status = 'done';
-            // ⚠️ 부모는 회차 페이지가 아니므로 document.title 로 덮어쓰지 않는다(목록 제목 오염 방지). 권위 라벨 보존.
-            logger.success(`📋 lease 항목 완료 (${pos}/${q.length})`, 'Queue');
-            _emitProgress({ phase: '항목 완료', pos, total: q.length, url: item.url });
-        } catch (e) {
-            item.status = 'error';
-            item.error = e && e.message ? e.message : String(e);
-            logger.error(`📋 lease 항목 실패: ${item.error}`, 'Queue');
-            _emitProgress({ phase: '항목 실패', pos, total: q.length, url: item.url, error: item.error });
-        }
-        // 인덱스/타 항목 보존을 위해 최신 큐에 다시 반영(처리 중 추가 lease 가 들어왔어도 안전).
-        q = getQueue();
-        const wi = q.findIndex(i => i.unitId === unitId);
-        if (wi >= 0) { q[wi] = item; saveQueue(q); }
-    }
-
-    // 이번 배치 처리 완료 → running=false 로 내려 remote.js 폴링이 다음 사이클을 트리거하게 한다.
-    //   pollLease 는 !isRunning() && pending 존재 시 startQueue() 호출 → (lease 분기) location.reload() →
-    //   부모의 "현재 페이지"(시리즈 목록 등 무해한 origin) 재로드 → 새 maybeRunQueue → runLeaseQueue 다음 배치.
-    //   부모는 회차 페이지로 절대 이동하지 않으므로 컨트롤러가 회차 probe 에 노출되지 않는다(안티탐지).
-    //   pending 이 더 없으면 다음 maybeRunQueue 진입 시 상단 "pending 0" 분기에서 자연 종료.
-    //   (기존 navigation 모드의 "로컬 큐 소진 시 running off → pollLease 재임대/재시작" 의미와 동일.)
-    setRunning(false);
-    const stillPending = getQueue().some(i => i.status === 'pending');
-    if (!stillPending) {
-        logger.success('✅ lease 배치 완료(대기 항목 없음)', 'Queue');
+    } finally {
+        _leaseBusy = false;
+        setRunning(false);
     }
 }
 
