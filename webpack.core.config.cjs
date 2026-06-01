@@ -5,13 +5,13 @@ const TerserPlugin = require('terser-webpack-plugin');
 
 // Metadata Block
 const METADATA_MAIN = `// ==UserScript==
-// @name         TokiSync (Link to Drive)
-// @namespace    http://tampermonkey.net/
-// @version      1.21.5
-// @description  Toki series sites -> Google Drive syncing tool (Bundled)
-// @author       pray4skylark
-// @updateURL    https://pray4skylark.github.io/tokiSync/tokiSync.user.js
-// @downloadURL  https://pray4skylark.github.io/tokiSync/tokiSync.user.js
+// @name         TokiSync (Link to Drive) [LAN Custom v1.21]
+// @namespace    local://lan/tokisync-custom
+// @version      1.21.5-multi.260601-1
+// @description  Toki series sites -> NAS/Drive syncing (Bundled) — LAN custom: 멀티-IP lease + 네이티브 NAS(WebDAV) on upstream v1.21.5
+// @author       pray4skylark + local patch
+// @updateURL    http://192.168.0.100:8765/docs/tokiSync.user.js
+// @downloadURL  http://192.168.0.100:8765/docs/tokiSync.user.js
 // @match        *://*/*webtoon/*
 // @match        *://*/*novel/*
 // @match        *://*/*manhwa/*
