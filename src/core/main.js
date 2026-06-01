@@ -36,12 +36,21 @@ async function downloadSingleEpisode(destination = 'local', unit = null) {
     if (!parser) throw new Error('파서를 찾을 수 없습니다.');
 
     const metadata = await extractEpisodeData(document, parser, siteInfo, false);
-    const title = metadata.episodeTitle || 'Current_Episode';
     const seriesTitle = metadata.seriesTitle || 'Unknown_Series';
     const seriesMeta = (typeof parser.getSeriesMetadata === 'function') ? parser.getSeriesMetadata() : {};
     // 폴더명은 expand(메인 페이지)에서 계산한 정식값([id] 작품명)을 우선 — 회차마다/외전까지 일관.
     //   회차 페이지에선 작품명 추출이 불안정하므로(외전 등) 이게 핵심.
     const folderName = (unit && unit.series) || seriesTitle;
+
+    // 회차 번호/제목도 시리즈 목록의 권위값(unit.num/unit.title) 우선 — 외전·소수회차(327.5)도 정확.
+    let num = (unit && unit.num) ? String(unit.num) : (metadata.episodeNum || '0000');
+    if (/^\d+$/.test(num)) num = num.padStart(4, '0'); // "332"→"0332" (소수 327.5 등은 그대로)
+    let epTitle = (unit && unit.title) ? unit.title : (metadata.episodeTitle || 'Current_Episode');
+    // 폴더에 이미 들어간 작품명 접두사를 제목에서 제거(중복 방지). "[14] 일곱개의 대죄" → "일곱개의 대죄".
+    const workName = String(folderName).replace(/^\[[^\]]*\]\s*/, '').trim();
+    if (workName && epTitle.startsWith(workName)) {
+        epTitle = epTitle.slice(workName.length).replace(/^[\s\-:·~|]+/, '').trim() || epTitle;
+    }
 
     const isNovel = (siteInfo.category === 'Novel' || siteInfo.category === 'novel');
     let builder;
@@ -51,24 +60,24 @@ async function downloadSingleEpisode(destination = 'local', unit = null) {
         builder = novelFormat === 'txt' ? new TxtBuilder() : new EpubBuilder();
         extension = novelFormat;
     } else {
-        builder = new CbzBuilder(title);
+        builder = new CbzBuilder(epTitle);
     }
 
-    const tempItem = { title, src: document.URL, url: document.URL, num: metadata.episodeNum || '0000' };
+    const tempItem = { title: epTitle, src: document.URL, url: document.URL, num };
     await processItem(tempItem, builder, siteInfo, null, parser, seriesTitle, document);
 
     logger.log('💾 파일 생성 및 저장 중...', 'System');
     const zip = await builder.build({
-        series: seriesTitle, title, number: tempItem.num,
+        series: workName || seriesTitle, title: epTitle, number: num,
         writer: seriesMeta.author || '', author: seriesMeta.author || '',
         summary: seriesMeta.summary || '', status: seriesMeta.status || '',
         tags: seriesMeta.tags || [], category: siteInfo.category,
     });
     const blob = await zip.generateAsync({ type: 'blob', compression: getCbzCompression() });
-    const filename = `${tempItem.num} - ${title}`;
+    const filename = `${num} - ${epTitle}`;
     await saveFile(blob, filename, destination, extension, { category: siteInfo.category, folderName });
     logger.success(`✅ 회차 다운로드 완료! (${folderName}/${filename})`, 'System');
-    return { num: tempItem.num, title };
+    return { num, title: epTitle };
 }
 
 export async function main() {

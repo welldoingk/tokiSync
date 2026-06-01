@@ -85,8 +85,8 @@ export function addLeasedUnits(units) {
         if (activeKeys.has(k)) continue;                  // 미완 항목과 URL 충돌 → 중복 다운로드 방지
         seenIds.add(u.id);
         activeKeys.add(k);
-        // series = expand(메인 페이지)에서 계산한 정식 폴더명([id] 작품명). 다운로드 시 폴더로 사용.
-        q.push({ url: u.url, title: u.label || '', status: 'pending', unitId: u.id, series: u.series || '' });
+        // series=정식 폴더명([id] 작품명), num/title=시리즈 목록의 권위 회차번호/제목. 다운로드 시 사용.
+        q.push({ url: u.url, title: u.label || '', status: 'pending', unitId: u.id, series: u.series || '', num: u.num || '' });
         added++;
     }
     if (added) saveQueue(q);

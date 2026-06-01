@@ -168,11 +168,14 @@ export class Store {
      * 작업 enqueue — urls를 unit으로 펼쳐 풀에 추가(정규화 url 키로 멱등).
      * @returns {{added: number, skipped: number}}
      */
-    addUnits(series, urls, now) {
+    addUnits(series, items, now) {
         let added = 0;
         let skipped = 0;
-        for (const raw of urls) {
-            const url = String(raw).trim();
+        for (const raw of items) {
+            // raw 는 문자열(url) 또는 객체({url, num, label}) — 후자는 시리즈 목록에서 가져온
+            // 권위 회차번호/제목을 동봉(외전·소수회차도 정확히 명명).
+            const isObj = raw && typeof raw === 'object';
+            const url = String(isObj ? (raw.url || '') : raw).trim();
             if (!url) continue;
             const key = normalizeUrlKey(url);
             if (this._unitKeys.has(key)) {
@@ -185,7 +188,8 @@ export class Store {
                 url,
                 key,
                 series: series || '',
-                label: urlLabel(url),
+                label: (isObj && raw.label) ? String(raw.label).slice(0, 200) : urlLabel(url),
+                num: (isObj && raw.num != null && raw.num !== '') ? String(raw.num).slice(0, 20) : '',
                 status: 'pending',
                 clientId: null,
                 leasedAt: 0,
@@ -427,6 +431,7 @@ export class Store {
             url: u.url,
             series: u.series,
             label: u.label,
+            num: u.num || '',
             status: u.status,
             clientId: u.clientId,
             expiresAt: u.expiresAt,

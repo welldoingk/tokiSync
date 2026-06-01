@@ -6,8 +6,8 @@ const fs = require('fs');
 const METADATA_MAIN = `// ==UserScript==
 // @name         TokiSync (Link to Drive) [LAN Custom]
 // @namespace    local://lan/tokisync-custom
-// @version      1.20.5-custom.260601-3
-// @description  Toki series sites -> Google Drive syncing tool (Bundled) — LAN custom build (회차 폴더명을 메인 페이지에서 계산해 동봉: [id] 작품명 일관·외전 동일폴더)
+// @version      1.20.5-custom.260601-4
+// @description  Toki series sites -> Google Drive syncing tool (Bundled) — LAN custom build (회차 번호·제목도 시리즈 목록에서 동봉: 외전·소수회차 정확 명명 + 제목 작품명 중복 제거)
 // @author       pray4skylark + local patch
 // @updateURL    http://192.168.0.100:8765/docs/tokiSync.user.js
 // @downloadURL  http://192.168.0.100:8765/docs/tokiSync.user.js

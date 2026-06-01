@@ -170,18 +170,21 @@ function seriesFolderFromDoc(doc, seriesUrl) {
  * 시리즈를 회차로 펼쳐 /jobs 에 투입(각 unit에 정식 폴더명 series 동봉).
  * @param series 폴더명 오버라이드(버튼이 라이브 파서로 계산해 넘김). 없으면 가져온 doc에서 best-effort.
  */
-async function expandSeriesToJobs(cfg, seriesUrl, series, urlsOverride) {
-    let urls = urlsOverride, doc = null;
-    if (!urls) { const r = await fetchChapterUrls(seriesUrl); urls = r.urls; doc = r.doc; }
-    if (!urls || !urls.length) return { added: 0, skipped: 0, count: 0, folder: '' };
+async function expandSeriesToJobs(cfg, seriesUrl, series, itemsOverride) {
+    let items = itemsOverride, doc = null;
+    if (!items) { const r = await fetchChapterUrls(seriesUrl); items = r.urls; doc = r.doc; }
+    if (!items || !items.length) return { added: 0, skipped: 0, count: 0, folder: '' };
     const folder = series || (doc ? seriesFolderFromDoc(doc, seriesUrl) : '');
+    // items 가 객체({url,num,label})면 권위 번호/제목 동봉(units), 문자열이면 urls.
+    const data = { series: folder || '' };
+    if (typeof items[0] === 'object') data.units = items; else data.urls = items;
     const r = await gmRequest({
         method: 'POST',
         url: `${base(cfg.url)}/jobs`,
         token: cfg.token,
-        data: { series: folder || '', urls },
+        data,
     });
-    return { added: r.added || 0, skipped: r.skipped || 0, count: urls.length, folder };
+    return { added: r.added || 0, skipped: r.skipped || 0, count: items.length, folder };
 }
 
 /** heartbeat 응답의 expand 요청들을 처리(이미 처리한 id는 건너뜀, 멱등). */
@@ -469,16 +472,26 @@ async function onExpandCurrentSeries() {
         tokiAlert('먼저 🌐 원격 제어 설정에서 컨트롤 API 주소/토큰을 설정하고 활성화하세요.');
         return;
     }
-    // 현재 페이지 DOM에서 직접 회차 추출(이미 Cloudflare 통과·렌더된 상태).
-    const urls = extractChapterUrls(document, location.href);
-    if (!urls.length) {
+    // 라이브 파서로 회차 목록 추출 — 각 회차의 권위 번호(num)/제목(title)을 함께 가져온다
+    //   (외전·소수회차도 정확히 명명). 파서 실패 시 generic anchor 추출로 폴백.
+    let items = [];
+    try {
+        const parser = await ParserFactory.getParser();
+        const list = (parser && parser.getListItems) ? (await parser.getListItems()) || [] : [];
+        if (list.length && parser.parseListItem) {
+            items = list.map((li) => { const it = parser.parseListItem(li); return { url: it.src, num: it.num, label: it.title }; })
+                        .filter((u) => u.url && /^https?:\/\//i.test(u.url));
+        }
+    } catch (e) {}
+    if (!items.length) items = extractChapterUrls(document, location.href); // 폴백(문자열 url들)
+    if (!items.length) {
         tokiAlert('이 페이지에서 회차 목록을 찾지 못했습니다.\n작품 메인(회차 목록) 페이지에서 실행하세요.');
         return;
     }
     try {
         // 라이브 파서로 정식 폴더명([id] 작품명) 계산 → 모든 회차가 같은 폴더(외전 포함)로 분류됨.
         const folder = await computeSeriesFolderLive();
-        const r = await expandSeriesToJobs(cfg, location.href, folder, urls);
+        const r = await expandSeriesToJobs(cfg, location.href, folder, items);
         tokiAlert(`📤 ${r.count}개 회차를 원격 풀에 투입했습니다.\n폴더: ${r.folder || '(자동)'}\n추가 ${r.added} · 중복 ${r.skipped} 제외\n각 클라이언트(프로필)가 나눠서 다운로드합니다.`);
     } catch (e) {
         tokiAlert('투입 실패: ' + (e && e.message ? e.message : e));

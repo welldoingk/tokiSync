@@ -216,14 +216,20 @@ async function handleApi(req, res, url) {
 
     // ── 멀티-IP lease 모드 엔드포인트 ────────────────────────────────────
 
-    // POST /jobs {series, urls[]} — 작업 enqueue(회차 unit으로 펼침, 멱등)
+    // POST /jobs {series, urls[]|units[]} — 작업 enqueue(회차 unit으로 펼침, 멱등)
     if (method === 'POST' && pathname === '/jobs') {
         const body = await parseBody(req, res);
         if (body === null) return;
-        const urls = normalizeUrls(body.urls);
-        if (!urls.length) return sendJson(res, 400, { ok: false, error: 'no valid urls' });
         const series = typeof body.series === 'string' ? body.series.slice(0, 200) : '';
-        const { added, skipped } = store.addUnits(series, urls, now());
+        // units[]({url,num,label}) 우선(시리즈 목록의 권위 번호/제목 동봉), 없으면 urls[](문자열).
+        let items;
+        if (Array.isArray(body.units) && body.units.length) {
+            items = body.units.filter((u) => u && typeof u.url === 'string' && /^https?:\/\//i.test(u.url));
+        } else {
+            items = normalizeUrls(body.urls);
+        }
+        if (!items.length) return sendJson(res, 400, { ok: false, error: 'no valid urls/units' });
+        const { added, skipped } = store.addUnits(series, items, now());
         const { pool } = store.clients(now(), config.onlineWindowMs);
         return sendJson(res, 200, { ok: true, added, skipped, pool });
     }
