@@ -1,0 +1,15 @@
+{
+  "port": 8787,
+  "host": "0.0.0.0",
+  "token": "CHANGE-ME-to-a-long-random-string",
+  "onlineWindowMs": 30000,
+  "dataFile": "data/state.json",
+  "telegram": {
+    "_comment": "방법1: botToken+chatId 직접 / 방법2: scriptPath로 기존 telegram-noti.sh 사용. 비밀값은 env(TELEGRAM_BOT_TOKEN 등)로 주입 권장.",
+    "botToken": "",
+    "chatId": "",
+    "threadId": "2",
+    "scriptPath": "/home/robocom/.claude/scripts/telegram-noti.sh",
+    "minIntervalMs": 60000
+  }
+}
