@@ -9,6 +9,7 @@ import { TxtBuilder } from './txt.js';
 import { fetchHistory } from './gas.js';
 import { ParserFactory } from './parsers/ParserFactory.js';
 import { getOAuthToken, fetchHistoryDirect } from './network.js';
+import { startRemoteSync, registerRemoteMenu } from './remote.js';
 
 import { getCommonPrefix, blobToArrayBuffer, saveFile } from './utils.js';
 
@@ -164,6 +165,9 @@ export async function main() {
         });
         GM_registerMenuCommand('📂 파일명 표준화 (Migration)', runFilenameMigration);
     }
+
+    // -- 1-b. 원격 제어(멀티-IP lease) GM 메뉴 등록 (top window 한정, registerRemoteMenu 내부 가드) --
+    registerRemoteMenu();
 
     // -- 2. Pre-detection & Core States --
     const siteInfo = await detectSite();
@@ -436,6 +440,10 @@ export async function main() {
             }
         }
     });
+
+    // -- 원격 제어(멀티-IP lease) 폴링 시작 (top window 한정, 설정 활성화 시에만 가동) --
+    //    내부에서 enabled/url 미설정·worker 창이면 즉시 무시. lease 모드면 큐 스케줄러도 1회 init.
+    try { startRemoteSync(); } catch (e) { console.warn('[TokiSync] 원격 동기화 시작 실패:', e); }
 
     // Initial load
     console.log('[TokiSync] Starting history sync...');
