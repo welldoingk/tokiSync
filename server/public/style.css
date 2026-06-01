@@ -37,6 +37,11 @@ header {
     justify-content: space-between;
     gap: 10px;
     margin-bottom: 14px;
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    background: var(--bg);
+    padding: 8px 0;
 }
 
 header h1 {
@@ -209,3 +214,111 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 }
 .client-card .tag.run { color: var(--accent); border-color: var(--accent); }
 #toast.show { opacity: 0.95; }
+
+/* ── 라이트 테마 (body.light 오버라이드) ── */
+body.light {
+    --bg: #f4f6f9;
+    --panel: #ffffff;
+    --panel-2: #eef1f6;
+    --border: #d6dae2;
+    --text: #1a1d23;
+    --muted: #667085;
+    --accent: #10b981;
+    --accent-2: #3b82f6;
+    --danger: #ef4444;
+    --warn: #d97706;
+}
+body.light .pill.on { color: #fff; }
+body.light .pill.run { color: #fff; }
+body.light button.primary { color: #fff; }
+body.light button.blue { color: #fff; }
+body.light #toast { background: #1a1d23; }
+
+/* ── 헤더 액션(테마 토글 등) ── */
+.header-actions { display: flex; align-items: center; gap: 6px; }
+.icon-btn {
+    flex: 0 0 auto;
+    padding: 5px 9px;
+    font-size: 15px;
+    line-height: 1;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+}
+.icon-btn.active { background: var(--accent); color: #052e1a; border-color: var(--accent); }
+body.light .icon-btn.active { color: #fff; }
+
+/* ── 진행 현황 강화: ETA / 처리속도 ── */
+.pool-eta {
+    margin-top: 6px;
+    font-size: 12.5px;
+    color: var(--accent-2);
+    font-weight: 600;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.pool-eta:empty { display: none; }
+.pool-eta .done-rate { color: var(--accent); }
+
+/* 클라이언트 현재 회차 */
+.client-card .cc-current {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.client-card .cc-current .ico { opacity: .8; margin-right: 4px; }
+
+/* ── 최근 작품 칩 (투입 편의) ── */
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.chips:empty { display: none; }
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    padding: 4px 6px 4px 10px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: filter .15s;
+}
+.chip:hover { filter: brightness(1.12); border-color: var(--accent-2); }
+.chip .chip-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
+.chip .chip-x {
+    flex: 0 0 auto;
+    width: 16px; height: 16px;
+    line-height: 15px; text-align: center;
+    border-radius: 50%;
+    color: var(--muted);
+    font-size: 11px;
+}
+.chip .chip-x:hover { background: var(--danger); color: #fff; }
+.chips-label { font-size: 11px; color: var(--muted); margin-top: 10px; }
+
+/* ── 토글 스위치 (설정) ── */
+.switch-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
+.switch-row label { flex: 1 1 auto; font-size: 13px; color: var(--text); cursor: pointer; }
+.switch { position: relative; width: 40px; height: 22px; flex: 0 0 auto; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch .slider {
+    position: absolute; inset: 0;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    transition: background .15s;
+}
+.switch .slider::before {
+    content: ""; position: absolute;
+    width: 16px; height: 16px; left: 2px; top: 2px;
+    background: var(--muted);
+    border-radius: 50%;
+    transition: transform .15s, background .15s;
+}
+.switch input:checked + .slider { background: var(--accent); border-color: var(--accent); }
+.switch input:checked + .slider::before { transform: translateX(18px); background: #fff; }

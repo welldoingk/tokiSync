@@ -11,9 +11,12 @@
     <div class="wrap">
         <header>
             <h1>📡 tokiSync 원격 제어</h1>
-            <div class="status-pills">
-                <span id="pill-online" class="pill off">스크립트 오프라인</span>
-                <span id="pill-running" class="pill">정지</span>
+            <div class="header-actions">
+                <div class="status-pills">
+                    <span id="pill-online" class="pill off">스크립트 오프라인</span>
+                    <span id="pill-running" class="pill">정지</span>
+                </div>
+                <button id="btn-theme" class="icon-btn" title="라이트/다크 테마 전환">🌙</button>
             </div>
         </header>
 
@@ -39,6 +42,7 @@
             <h2>🌐 멀티-IP 작업 풀 <span id="pause-badge"></span></h2>
             <div id="pool-bar" class="pool-bar"></div>
             <div id="pool-counts" class="pool-counts muted"></div>
+            <div id="pool-eta" class="pool-eta"></div>
             <div class="row">
                 <button id="btn-pause" class="blue">⏸️ 전체 정지</button>
                 <button id="btn-clear-pool" class="danger">🗑️ 풀 비우기</button>
@@ -61,6 +65,8 @@
                     <button id="btn-expand" class="primary">📤 전체 회차 자동 투입</button>
                 </div>
                 <div class="muted" style="font-size:12px">온라인 win-c 클라이언트가 작품 페이지에서 회차 목록을 펼쳐 풀에 투입합니다(서버는 Cloudflare로 직접 못 받음). 클라이언트가 1개 이상 온라인이어야 합니다.</div>
+                <div id="recent-label" class="chips-label" style="display:none">🕘 최근 투입 (클릭 = 재투입)</div>
+                <div id="recent-chips" class="chips"></div>
             </div>
 
             <div class="settings-grid">
@@ -115,6 +121,14 @@
                     <div>
                         <label>폴링 주기 (초)</label>
                         <input type="number" id="set-poll" min="2" max="60" value="3" />
+                    </div>
+                    <div class="switch-row">
+                        <label for="set-notify">🔔 알림 (전체 완료·캡차 시 브라우저 알림 + 소리)</label>
+                        <span class="switch"><input type="checkbox" id="set-notify" /><span class="slider"></span></span>
+                    </div>
+                    <div class="switch-row">
+                        <label for="set-wakelock">📱 화면 항상 켜두기 (모니터링 중 절전 방지)</label>
+                        <span class="switch"><input type="checkbox" id="set-wakelock" /><span class="slider"></span></span>
                     </div>
                     <div class="row">
                         <button id="btn-save">저장</button>

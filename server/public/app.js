@@ -6,10 +6,22 @@
         base: 'toki.base',
         token: 'toki.token',
         poll: 'toki.poll',
+        theme: 'toki.theme',
+        notify: 'toki.notify',
+        wakelock: 'toki.wakelock',
+        recent: 'toki.recent',
     };
 
     const $ = (id) => document.getElementById(id);
     let pollTimer = null;
+
+    // ── 편의 기능 상태 ──
+    let _doneHist = [];          // [{t, done}] 슬라이딩 윈도우(ETA/속도 추정)
+    let _prevActive = false;     // 직전 폴링에 작업이 진행 중이었나(전체 완료 엣지 알림용)
+    let _prevCaptcha = -1;       // 직전 캡차 개수(증가 시 알림). -1 = 첫 로드(알림 안 함)
+    let _leasedMap = {};         // clientId → [leased unit] (현재 처리 회차 표시용)
+    let _wakeLock = null;        // Screen Wake Lock 센티넬
+    let _audioCtx = null;        // 알림 비프용 (lazy)
 
     function getBase() {
         const b = (localStorage.getItem(LS.base) || '').trim().replace(/\/+$/, '');
@@ -62,6 +74,171 @@
         return s === 'done' ? '✅' : s === 'error' ? '❌' : '⏳';
     }
 
+    function shortUrl(u) {
+        try { return new URL(u).pathname || u; } catch (_) { return u; }
+    }
+
+    function fmtDur(sec) {
+        if (!isFinite(sec) || sec < 0) return '-';
+        const m = Math.round(sec / 60);
+        if (m < 1) return '1분 미만';
+        if (m < 60) return m + '분';
+        return Math.floor(m / 60) + '시간 ' + (m % 60) + '분';
+    }
+
+    // ── ④ 테마 토글 (다크 ↔ 라이트) ──
+    function applyTheme() {
+        const light = (localStorage.getItem(LS.theme) || 'dark') === 'light';
+        document.body.classList.toggle('light', light);
+        const b = $('btn-theme');
+        if (b) b.textContent = light ? '☀️' : '🌙';
+        const meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.content = light ? '#f4f6f9' : '#0f1115';
+    }
+    function toggleTheme() {
+        const cur = (localStorage.getItem(LS.theme) || 'dark');
+        localStorage.setItem(LS.theme, cur === 'light' ? 'dark' : 'light');
+        applyTheme();
+    }
+
+    // ── ④ 화면 항상 켜두기 (Screen Wake Lock) ──
+    async function requestWakeLock() {
+        try {
+            if ('wakeLock' in navigator && !_wakeLock) {
+                _wakeLock = await navigator.wakeLock.request('screen');
+                _wakeLock.addEventListener('release', () => { _wakeLock = null; });
+            }
+        } catch (_) { /* 권한/미지원 → 무시 */ }
+    }
+    function releaseWakeLock() {
+        try { if (_wakeLock) { _wakeLock.release(); _wakeLock = null; } } catch (_) {}
+    }
+    function applyWakeLock() {
+        const on = localStorage.getItem(LS.wakelock) === '1';
+        const cb = $('set-wakelock');
+        if (cb) cb.checked = on;
+        if (on) requestWakeLock(); else releaseWakeLock();
+    }
+
+    // ── ③ 알림 (브라우저 알림 + 비프) ──
+    function beep() {
+        try {
+            _audioCtx = _audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+            if (_audioCtx.state === 'suspended') _audioCtx.resume();
+            const o = _audioCtx.createOscillator();
+            const g = _audioCtx.createGain();
+            o.connect(g); g.connect(_audioCtx.destination);
+            o.type = 'sine'; o.frequency.value = 880;
+            const t = _audioCtx.currentTime;
+            g.gain.setValueAtTime(0.0001, t);
+            g.gain.exponentialRampToValueAtTime(0.22, t + 0.02);
+            g.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+            o.start(t); o.stop(t + 0.42);
+        } catch (_) {}
+    }
+    function notify(title, body) {
+        if (localStorage.getItem(LS.notify) !== '1') return;
+        beep();
+        try {
+            if ('Notification' in window && Notification.permission === 'granted') {
+                new Notification(title, { body: body || '', tag: 'tokisync', renotify: true });
+            }
+        } catch (_) {}
+        toast(title + (body ? ' — ' + body : ''));
+    }
+    function onNotifyToggle() {
+        const on = $('set-notify').checked;
+        localStorage.setItem(LS.notify, on ? '1' : '0');
+        if (on) {
+            beep(); // 사용자 제스처 컨텍스트에서 오디오 활성화(모바일 정책)
+            try {
+                if ('Notification' in window && Notification.permission === 'default') {
+                    Notification.requestPermission();
+                }
+            } catch (_) {}
+        }
+    }
+
+    // ── ② 최근 투입 작품 칩 ──
+    function getRecent() {
+        try { return JSON.parse(localStorage.getItem(LS.recent) || '[]'); } catch (_) { return []; }
+    }
+    function addRecent(url, series) {
+        if (!url) return;
+        let r = getRecent().filter((x) => x.url !== url);
+        r.unshift({ url, series: series || '', t: Date.now() });
+        localStorage.setItem(LS.recent, JSON.stringify(r.slice(0, 8)));
+        renderRecent();
+    }
+    function removeRecent(url) {
+        localStorage.setItem(LS.recent, JSON.stringify(getRecent().filter((x) => x.url !== url)));
+        renderRecent();
+    }
+    function renderRecent() {
+        const box = $('recent-chips');
+        const lbl = $('recent-label');
+        if (!box) return;
+        const r = getRecent();
+        if (!r.length) { box.innerHTML = ''; if (lbl) lbl.style.display = 'none'; return; }
+        if (lbl) lbl.style.display = '';
+        box.innerHTML = r
+            .map((x) => {
+                const name = x.series || shortUrl(x.url);
+                return `<span class="chip" data-url="${esc(x.url)}" title="${esc(x.url)}">
+                    <span class="chip-label">${esc(name)}</span>
+                    <span class="chip-x" data-x="1">✕</span>
+                </span>`;
+            })
+            .join('');
+        box.querySelectorAll('.chip').forEach((c) => {
+            c.onclick = (e) => {
+                if (e.target.dataset.x) { removeRecent(c.dataset.url); return; }
+                $('exp-url').value = c.dataset.url;
+                submitExpand();
+            };
+        });
+    }
+
+    // ── ① 진행 현황: ETA / 처리 속도 추정 + 전체 완료 알림 ──
+    function updateEtaAndAlerts(pool) {
+        const eta = $('pool-eta');
+        const total = (pool && pool.total) || 0;
+        const done = (pool && pool.done) || 0;
+        const remaining = ((pool && pool.pending) || 0) + ((pool && pool.leased) || 0);
+        const now = Date.now();
+
+        // done이 줄었으면(풀 비움/재투입) 히스토리 리셋
+        if (_doneHist.length && done < _doneHist[_doneHist.length - 1].done) _doneHist = [];
+        _doneHist.push({ t: now, done });
+        _doneHist = _doneHist.filter((h) => now - h.t <= 90000); // 90초 윈도우
+
+        if (eta) {
+            if (remaining > 0 && _doneHist.length >= 2) {
+                const first = _doneHist[0];
+                const dt = (now - first.t) / 1000;
+                const dd = done - first.done;
+                if (dt > 0 && dd > 0) {
+                    const ratePerMin = (dd / dt) * 60;
+                    const etaSec = remaining / (dd / dt);
+                    eta.innerHTML = `<span>⏱️ 남은 시간 ~${esc(fmtDur(etaSec))}</span>` +
+                        `<span class="done-rate">⚡ ${ratePerMin.toFixed(1)}회차/분</span>`;
+                } else {
+                    eta.innerHTML = `<span>⏱️ 속도 측정 중…</span>`;
+                }
+            } else {
+                eta.innerHTML = '';
+            }
+        }
+
+        // 전체 완료 엣지 알림: 직전엔 진행 중(remaining>0)이었는데 지금 0
+        const active = total > 0 && remaining > 0;
+        if (_prevActive && !active && done > 0) {
+            notify('✅ 전체 다운로드 완료', `${done}건 완료 · 실패 ${(pool && pool.failed) || 0}`);
+            _doneHist = [];
+        }
+        _prevActive = active;
+    }
+
     function renderQueue(report) {
         const q = (report && report.queue) || [];
         $('q-count').textContent = q.length;
@@ -89,6 +266,13 @@
     function renderCaptcha(list) {
         const panel = $('captcha-panel');
         const box = $('captcha');
+        const n = (list && list.length) || 0;
+        // 새 캡차 발생 엣지 알림(첫 로드 _prevCaptcha=-1 일 땐 건너뜀)
+        if (_prevCaptcha >= 0 && n > _prevCaptcha) {
+            const latest = list[n - 1] || {};
+            notify('⚠️ 캡차 감지', latest.message || '원격 브라우저 확인 필요');
+        }
+        _prevCaptcha = n;
         if (!list || !list.length) {
             panel.style.display = 'none';
             return;
@@ -165,6 +349,14 @@
                 const phase = p && (p.phase || (p.pos && p.total ? `${p.pos}/${p.total}` : '')) || '';
                 const dot = c.online ? 'on' : 'off';
                 const run = c.running ? '<span class="tag run">실행</span>' : '<span class="tag">정지</span>';
+                // 현재 처리 중인 회차: progress.url과 매칭되는 leased unit 우선, 없으면 보유 lease 중 첫 항목
+                const mine = _leasedMap[c.clientId] || [];
+                let cur = null;
+                if (p && p.url) cur = mine.find((u) => u.url === p.url) || null;
+                if (!cur && mine.length) cur = mine[0];
+                const curLabel = cur ? ((cur.num ? cur.num + ' ' : '') + (cur.label || shortUrl(cur.url))) : '';
+                const curHtml = (c.online && curLabel)
+                    ? `<div class="cc-current"><span class="ico">▶️</span>${esc(curLabel)}</div>` : '';
                 return `<div class="client-card">
                     <div class="cc-head">
                         <span class="dot ${dot}"></span>
@@ -172,6 +364,7 @@
                         ${c.ip ? `<span class="muted">${esc(c.ip)}</span>` : ''}
                         ${run}
                     </div>
+                    ${curHtml}
                     <div class="cc-meta muted">
                         보유 ${c.leased || 0}건${phase ? ` · ${esc(phase)}` : ''} · ${c.online ? fmtTime(c.ts) : '오프라인'}
                     </div>
@@ -185,7 +378,17 @@
         try {
             const data = await api('/clients');
             const clients = data.clients || [];
+            // 현재 처리 중인 회차 라벨 매핑용: leased unit을 clientId별로 묶는다(내부망, 가벼운 호출).
+            try {
+                const lu = await api('/units?status=leased');
+                _leasedMap = {};
+                (lu.units || []).forEach((u) => {
+                    if (!u.clientId) return;
+                    (_leasedMap[u.clientId] = _leasedMap[u.clientId] || []).push(u);
+                });
+            } catch (_) { _leasedMap = {}; }
             renderPool(data.pool || {});
+            updateEtaAndAlerts(data.pool || {});
             renderClients(clients);
             // 정지 상태 반영 (버튼 라벨 + 배지)
             _paused = !!data.paused;
@@ -268,8 +471,10 @@
     async function submitExpand() {
         const seriesUrl = $('exp-url').value.trim();
         if (!/^https?:\/\//i.test(seriesUrl)) return toast('작품 메인 URL을 입력하세요');
+        const series = $('job-series').value.trim();
         try {
-            await api('/jobs/expand', { method: 'POST', body: { seriesUrl, series: $('job-series').value.trim() } });
+            await api('/jobs/expand', { method: 'POST', body: { seriesUrl, series } });
+            addRecent(seriesUrl, series); // ② 최근 투입 칩에 기록
             $('exp-url').value = '';
             toast('펼침 요청 전송 — 온라인 클라이언트가 회차를 투입합니다');
             setTimeout(refresh, 1500);
@@ -344,6 +549,8 @@
         $('set-base').value = localStorage.getItem(LS.base) || '';
         $('set-token').value = localStorage.getItem(LS.token) || '';
         $('set-poll').value = getPollSec();
+        $('set-notify').checked = localStorage.getItem(LS.notify) === '1';
+        $('set-wakelock').checked = localStorage.getItem(LS.wakelock) === '1';
     }
 
     function saveSettings() {
@@ -376,6 +583,20 @@
         $('btn-requeue-stuck').onclick = () => requeueByStatus('leased', '진행 중');
         $('btn-pause').onclick = togglePause;
         $('btn-clear-pool').onclick = clearPool;
+        // 편의 기능 배선
+        $('btn-theme').onclick = toggleTheme;
+        $('set-notify').onchange = onNotifyToggle;
+        $('set-wakelock').onchange = () => {
+            localStorage.setItem(LS.wakelock, $('set-wakelock').checked ? '1' : '0');
+            applyWakeLock();
+        };
+        // 백그라운드 전환 시 브라우저가 wake lock을 자동 해제 → 복귀 시 재획득
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible' && localStorage.getItem(LS.wakelock) === '1') requestWakeLock();
+        });
+        applyTheme();
+        applyWakeLock();
+        renderRecent();
         refresh();
         startPolling();
     }
