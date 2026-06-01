@@ -363,10 +363,29 @@ export class GenericParser extends BaseParser {
 
     getViewerMetadata(viewerDocument) {
         const viewerCfg = this.rule.viewer || {};
-        
-        let seriesTitle = this._extractValue(viewerDocument, viewerCfg.seriesTitle) || "UnknownSeries";
-        let episodeTitle = this._extractValue(viewerDocument, viewerCfg.episodeTitle) || "UnknownEpisode";
-        let episodeNum = this._extractValue(viewerDocument, viewerCfg.episodeNum) || "0000";
+
+        let seriesTitle = this._extractValue(viewerDocument, viewerCfg.seriesTitle) || "";
+        let episodeTitle = this._extractValue(viewerDocument, viewerCfg.episodeTitle) || "";
+        let episodeNum = this._extractValue(viewerDocument, viewerCfg.episodeNum) || "";
+
+        // [fallback] 룰에 뷰어 메타 셀렉터가 없는 사이트(예: sbxh 만화)는 페이지 제목을 파싱.
+        //   형식: "작품명 N화 | 뉴토끼" → series="작품명", episode="N화", num="N".
+        if (!seriesTitle || !episodeTitle || !episodeNum) {
+            const clean = ((viewerDocument && viewerDocument.title) || "").replace(/\s*[|｜].*$/, "").trim();
+            const m = clean.match(/^(.*?)\s+(\d+(?:\.\d+)?)\s*(화|권|話|회|장|부)\s*$/);
+            if (m) {
+                if (!seriesTitle) seriesTitle = m[1].trim();
+                if (!episodeTitle) episodeTitle = m[2] + m[3];
+                if (!episodeNum) episodeNum = m[2];
+            } else if (clean) {
+                if (!seriesTitle) seriesTitle = clean;
+                if (!episodeTitle) episodeTitle = clean;
+            }
+        }
+
+        seriesTitle = seriesTitle || "UnknownSeries";
+        episodeTitle = episodeTitle || "UnknownEpisode";
+        episodeNum = episodeNum || "0000";
 
         // Clean up episodeNum
         const match = episodeNum.match(/(\d+)/);
