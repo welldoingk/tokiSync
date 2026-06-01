@@ -147,9 +147,23 @@ export function showConfigModal(popupDoc = document) {
                 <select id="toki-cfg-policy" class="toki-select">
                     <option value="individual">개별 파일 (Individual)</option>
                     <option value="zipOfCbzs">챕터 묶음 (ZIP of CBZs)</option>
-                    <option value="native">자동 분류 (Native)</option>
+                    <option value="native">자동 분류 (Native = NAS WebDAV)</option>
                     <option value="drive">드라이브 업로드 (GoogleDrive)</option>
                 </select>
+            </div>
+
+            <div class="toki-section-title">NAS WebDAV (자동 분류 정책)</div>
+            <div class="toki-control-group">
+                <label class="toki-label">WebDAV URL</label>
+                <input type="text" id="toki-cfg-webdav-url" class="toki-input" placeholder="http://192.168.0.50:5005/books" value="${config.webdavUrl}">
+            </div>
+            <div class="toki-control-group">
+                <label class="toki-label">WebDAV 계정 (선택)</label>
+                <input type="text" id="toki-cfg-webdav-user" class="toki-input" placeholder="user" value="${config.webdavUser}">
+            </div>
+            <div class="toki-control-group">
+                <label class="toki-label">WebDAV 비밀번호 (선택)</label>
+                <input type="password" id="toki-cfg-webdav-pass" class="toki-input" placeholder="••••" value="${config.webdavPass}">
             </div>
 
             <div class="toki-control-group">
@@ -289,6 +303,9 @@ export function showConfigModal(popupDoc = document) {
         const newNovelFormat = doc.getElementById('toki-cfg-novel-format').value;
         const newRemoteRule = doc.getElementById('toki-cfg-remote-rule').value.trim();
         const newCustomRule = doc.getElementById('toki-cfg-custom-rule').value.trim() || '[]';
+        const newWebdavUrl = (doc.getElementById('toki-cfg-webdav-url') || {}).value || '';
+        const newWebdavUser = (doc.getElementById('toki-cfg-webdav-user') || {}).value || '';
+        const newWebdavPass = (doc.getElementById('toki-cfg-webdav-pass') || {}).value || '';
 
         // Validate Custom Rules JSON
         let validCustomRule = '[]';
@@ -327,6 +344,9 @@ export function showConfigModal(popupDoc = document) {
         setConfig(CFG_LOCAL_NAME_TEMPLATE, newNameTemplate);
         setConfig(CFG_LOCAL_EPISODE_PADDING, newLocalPadding);
         setConfig(CFG_SMART_SKIP_RATIO, newSmartSkip);
+        setConfig(CFG_WEBDAV_URL, newWebdavUrl.trim());
+        setConfig(CFG_WEBDAV_USER, newWebdavUser.trim());
+        setConfig(CFG_WEBDAV_PASS, newWebdavPass);
         setConfig(CFG_NOVEL_MODE, newNovelMode);
         setConfig(CFG_NOVEL_FORMAT, newNovelFormat);
         setConfig(CFG_REMOTE_RULE_URL, newRemoteRule);
