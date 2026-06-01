@@ -349,7 +349,9 @@ export function initBatchWorkerController() {
                         protocolDomain: item.protocolDomain || window.location.origin,
                         scanSpeedMultiplier: getConfig().scanSpeed,
                         localNameTemplate: getConfig().localNameTemplate || "{number} - {title}",
-                        localEpisodePadding: getConfig().localEpisodePadding || "4"
+                        localEpisodePadding: getConfig().localEpisodePadding || "4",
+                        cover: item.cover || '',
+                        meta: item.meta || null
                     });
                 }
             } else {

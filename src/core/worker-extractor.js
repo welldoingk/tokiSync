@@ -82,7 +82,9 @@ export function initWorkerExtractor() {
                 protocolDomain,
                 scanSpeedMultiplier = 1.0,
                 localNameTemplate = "{number} - {title}",
-                localEpisodePadding = "4"
+                localEpisodePadding = "4",
+                cover = '',
+                meta = null
             } = msg.payload;
 
             console.log(`🚀 [TokiSync:Worker] 동작 지시문 수신 (ID: ${queueId}, 유형: ${targetType})`);
@@ -172,11 +174,29 @@ export function initWorkerExtractor() {
 
                     const builder = (configNovelFormat === 'txt') ? new TxtBuilder() : new EpubBuilder();
                     builder.addChapter(episodeTitle, content.trim());
+
+                    // [표지] 소설 EPUB: 시리즈 목록에서 동봉된 cover URL 을 받아 blob 화 → EpubBuilder 에 전달.
+                    //   Kavita 는 파일명 "cover" 인 이미지를 표지로 사용(epub.js 에서 cover.<ext> 삽입).
+                    let coverObj = null;
+                    if (cover && configNovelFormat !== 'txt') {
+                        try {
+                            const cb = await fetchBlobWithXHR(cover);
+                            if (cb && cb.size > 0) coverObj = { blob: cb, type: cb.type || 'image/jpeg' };
+                        } catch (e) {
+                            console.warn(`[TokiSync:Worker] 표지 다운로드 실패(무시): ${e.message}`);
+                        }
+                    }
+
                     const zip = await builder.build({
                         series: seriesTitle,
                         title: episodeTitle,
                         number: episodeNum,
-                        writer: 'TokiSync'
+                        writer: (meta && meta.author) || 'TokiSync',
+                        author: (meta && meta.author) || '',
+                        summary: (meta && meta.summary) || '',
+                        status: (meta && meta.status) || '',
+                        tags: (meta && meta.tags) || [],
+                        cover: coverObj
                     });
                     blob = await zip.generateAsync({ type: 'blob' });
 
@@ -293,11 +313,17 @@ export function initWorkerExtractor() {
                     });
 
                     builder.addChapter(episodeTitle, resolvedImages);
+                    // [메타] 만화 CBZ: 시리즈 목록에서 동봉된 meta(작가/소개/태그/상태) 를 ComicInfo 로 전달.
+                    //   표지는 첫 이미지가 자동 사용되므로 별도 cover 불필요.
                     const zip = await builder.build({
                         series: seriesTitle,
                         title: episodeTitle,
                         number: episodeNum,
-                        writer: 'TokiSync'
+                        writer: (meta && meta.author) || 'TokiSync',
+                        summary: (meta && meta.summary) || '',
+                        status: (meta && meta.status) || '',
+                        tags: (meta && meta.tags) || [],
+                        category: targetType
                     });
                     blob = await zip.generateAsync({ type: 'blob' });
                 }
