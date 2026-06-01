@@ -13,6 +13,13 @@ export const CFG_CUSTOM_RULES = "TOKI_CUSTOM_RULES";
 export const CFG_WEBDAV_URL = "TOKI_WEBDAV_URL";   // 예: http://192.168.0.50:5005/books
 export const CFG_WEBDAV_USER = "TOKI_WEBDAV_USER";
 export const CFG_WEBDAV_PASS = "TOKI_WEBDAV_PASS";
+// [LAN custom] 멀티-IP 원격 lease 제어
+export const CFG_REMOTE_ENABLED = "TOKI_REMOTE_ENABLED";     // "1" | "0"
+export const CFG_REMOTE_API_URL = "TOKI_REMOTE_API_URL";     // 예: http://192.168.0.x:8787
+export const CFG_REMOTE_API_TOKEN = "TOKI_REMOTE_API_TOKEN";
+export const CFG_REMOTE_POLL_SEC = "TOKI_REMOTE_POLL_SEC";   // 폴링 주기(초), 기본 5
+export const CFG_REMOTE_CLIENT_ID = "TOKI_REMOTE_CLIENT_ID"; // 멀티-IP 식별 라벨(예: A-direct). 설정 시 lease 모드
+export const CFG_REMOTE_LEASE_MAX = "TOKI_REMOTE_LEASE_MAX"; // 동시 보유 lease 목표 수(기본 2, MAX_CONCURRENCY=2 이상 권장)
 
 /**
  * Get current configuration
@@ -59,6 +66,22 @@ export function getConfig() {
         webdavUrl: GM_getValue(CFG_WEBDAV_URL, ""),
         webdavUser: GM_getValue(CFG_WEBDAV_USER, ""),
         webdavPass: GM_getValue(CFG_WEBDAV_PASS, "")
+    };
+}
+
+/** 멀티-IP 원격 lease 제어 설정. clientId 설정 시 lease 모드. */
+export function getRemoteConfig() {
+    const gv = (k, d) => {
+        try { return typeof GM_getValue !== 'undefined' ? GM_getValue(k, d) : d; }
+        catch { return d; }
+    };
+    return {
+        enabled: gv(CFG_REMOTE_ENABLED, '0') === '1',
+        url: gv(CFG_REMOTE_API_URL, ''),
+        token: gv(CFG_REMOTE_API_TOKEN, ''),
+        pollSec: Math.max(2, parseInt(gv(CFG_REMOTE_POLL_SEC, '5'), 10) || 5),
+        clientId: (gv(CFG_REMOTE_CLIENT_ID, '') || '').trim(),
+        leaseMax: Math.max(1, Math.min(20, parseInt(gv(CFG_REMOTE_LEASE_MAX, '2'), 10) || 2)),
     };
 }
 
