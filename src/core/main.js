@@ -35,9 +35,17 @@ async function downloadSingleEpisode(destination = 'local', unit = null) {
     const parser = await ParserFactory.getParser();
     if (!parser) throw new Error('파서를 찾을 수 없습니다.');
 
-    const metadata = await extractEpisodeData(document, parser, siteInfo, false);
-    const seriesTitle = metadata.seriesTitle || 'Unknown_Series';
-    const seriesMeta = (typeof parser.getSeriesMetadata === 'function') ? parser.getSeriesMetadata() : {};
+    // [멀티-IP lease 분기] unit.unitId 가 있으면 부모 탭은 회차 페이지로 이동하지 않는다(시리즈 목록 등에 고정).
+    //   부모의 `document` 는 회차 페이지가 아니므로 extractEpisodeData(document,...) 로 메타 재추출 금지(엉뚱한 페이지).
+    //   회차 메타는 시리즈 목록의 권위값(unit.series/num/title)을 그대로 쓰고, 본문은 워커 팝업이 unit.url 로 가서 수집.
+    //   회차 URL 도 부모의 document.URL 이 아니라 반드시 unit.url 을 사용한다(부모는 회차에 안 가므로).
+    const isLease = !!(unit && unit.unitId);
+
+    const metadata = isLease ? {} : await extractEpisodeData(document, parser, siteInfo, false);
+    const seriesTitle = metadata.seriesTitle || (isLease ? (unit.series || 'Unknown_Series') : 'Unknown_Series');
+    // 시리즈 메타(작가/요약/태그/상태)는 파서가 제공할 때만 신뢰. lease 시 부모가 목록 페이지에 있어도
+    //   특정 작품을 가리키지 않을 수 있어 best-effort. 없으면 빈 메타(파일명/폴더명엔 영향 없음).
+    const seriesMeta = (typeof parser.getSeriesMetadata === 'function') ? (parser.getSeriesMetadata() || {}) : {};
     // 폴더명은 expand(메인 페이지)에서 계산한 정식값([id] 작품명)을 우선 — 회차마다/외전까지 일관.
     //   회차 페이지에선 작품명 추출이 불안정하므로(외전 등) 이게 핵심.
     const folderName = (unit && unit.series) || seriesTitle;
@@ -63,7 +71,10 @@ async function downloadSingleEpisode(destination = 'local', unit = null) {
         builder = new CbzBuilder(epTitle);
     }
 
-    const tempItem = { title: epTitle, src: document.URL, url: document.URL, num };
+    // lease 모드: 본문 수집 대상 URL 은 부모의 현재 페이지가 아니라 unit.url(회차 페이지). 워커 팝업이 이 URL 로 이동해 수집한다.
+    //   단일/벌크 모드: 기존대로 부모가 머문 회차 페이지(document.URL)를 사용.
+    const episodeUrl = isLease ? unit.url : document.URL;
+    const tempItem = { title: epTitle, src: episodeUrl, url: episodeUrl, num };
     await processItem(tempItem, builder, siteInfo, null, parser, seriesTitle, document);
 
     logger.log('💾 파일 생성 및 저장 중...', 'System');

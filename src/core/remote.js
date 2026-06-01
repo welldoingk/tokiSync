@@ -358,6 +358,12 @@ async function pollLease(cfg) {
             }
         }
     }
+    // lease 모드 in-place 처리(부모 고정)에서는 한 배치 종료 시 running=false 로 내려간다. 이때 보유 pending 이 남아 있으면
+    //   (이미 leaseMax 라 신규 added 가 0 이라도) 다음 배치를 위해 재시작이 필요하다 → added 여부와 무관하게 재개 트리거.
+    //   레거시 navigation 모드도 "pending 존재 + 정지" 면 동일하게 재시작(굶음 방지)하므로 의미가 보존된다.
+    if (!startAfter && !isRunning() && getQueue().some((i) => i.unitId && i.status === 'pending')) {
+        startAfter = true;
+    }
 
     // ③ heartbeat — clientId/외부IP/진행률/보유 unit 보고(서버가 해당 클라의 모든 leased unit TTL 갱신).
     //    내비게이션(startQueue) 전에 반드시 발사 → 임대 직후 페이지 전환으로 lease가 굶지 않게 한다.
