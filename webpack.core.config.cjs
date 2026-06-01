@@ -6,9 +6,11 @@ const fs = require('fs');
 const METADATA_MAIN = `// ==UserScript==
 // @name         TokiSync (Link to Drive) [LAN Custom]
 // @namespace    local://lan/tokisync-custom
-// @version      1.20.5-custom.260531-14
-// @description  Toki series sites -> Google Drive syncing tool (Bundled) — LAN custom build (lease 회차=단일 다운로드 수정 + 전체 정지/재개·풀 비우기)
+// @version      1.20.5-custom.260601-1
+// @description  Toki series sites -> Google Drive syncing tool (Bundled) — LAN custom build (Tampermonkey 자동 업데이트 지원: @updateURL/@downloadURL을 8765 LAN URL로)
 // @author       pray4skylark + local patch
+// @updateURL    http://192.168.0.100:8765/docs/tokiSync.user.js
+// @downloadURL  http://192.168.0.100:8765/docs/tokiSync.user.js
 // @match        *://*/*webtoon/*
 // @match        *://*/*novel/*
 // @match        *://*/*manhwa/*
