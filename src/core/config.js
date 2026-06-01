@@ -9,6 +9,10 @@ export const CFG_NOVEL_MODE = "TOKI_NOVEL_MODE";
 export const CFG_NOVEL_FORMAT = "TOKI_NOVEL_FORMAT";
 export const CFG_REMOTE_RULE_URL = "TOKI_REMOTE_RULE_URL";
 export const CFG_CUSTOM_RULES = "TOKI_CUSTOM_RULES";
+// [LAN custom] 네이티브 NAS WebDAV 저장 (policy 'native' = WebDAV 업로드)
+export const CFG_WEBDAV_URL = "TOKI_WEBDAV_URL";   // 예: http://192.168.0.50:5005/books
+export const CFG_WEBDAV_USER = "TOKI_WEBDAV_USER";
+export const CFG_WEBDAV_PASS = "TOKI_WEBDAV_PASS";
 
 /**
  * Get current configuration
@@ -50,7 +54,11 @@ export function getConfig() {
         novelMode: GM_getValue(CFG_NOVEL_MODE, "perChapter"), // default: chapter-by-chapter
         novelFormat: GM_getValue(CFG_NOVEL_FORMAT, "epub"), // default: EPUB
         remoteRuleUrl: remoteRuleUrl,
-        customRules: GM_getValue(CFG_CUSTOM_RULES, "[]")
+        customRules: GM_getValue(CFG_CUSTOM_RULES, "[]"),
+        // NAS WebDAV (policy 'native')
+        webdavUrl: GM_getValue(CFG_WEBDAV_URL, ""),
+        webdavUser: GM_getValue(CFG_WEBDAV_USER, ""),
+        webdavPass: GM_getValue(CFG_WEBDAV_PASS, "")
     };
 }
 
