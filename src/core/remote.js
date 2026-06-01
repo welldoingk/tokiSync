@@ -167,12 +167,57 @@ function seriesFolderFromDoc(doc, seriesUrl) {
 }
 
 /**
+ * 자동 펼침용: fetch 한 시리즈 HTML(doc)에 라이브 파서 룰(rule.list)을 직접 적용해
+ *   회차 {url, num, label} 추출 → 권위 회차번호/제목 동봉(자동 펼침도 정확 명명).
+ *   getListItems() 는 전역 document 의존이라 fetch된 doc 엔 못 쓰지만, parseListItem(el)/
+ *   _extractValue(el,...) 는 el 기반이라 임의 doc 요소에 재사용 가능하다. 동일 사이트(파서 룰 일치) 전제.
+ *   실패(룰 없음/컨테이너 없음/항목 0/예외)면 null 반환 → 호출부가 문자열 url 폴백.
+ */
+async function extractChapterItemsFromDoc(doc, seriesUrl) {
+    try {
+        if (!doc) return null;
+        const parser = await ParserFactory.getParser();
+        const listCfg = parser && parser.rule && parser.rule.list;
+        if (!listCfg || !listCfg.container || !listCfg.item || typeof parser.parseListItem !== 'function') return null;
+        const container = doc.querySelector(listCfg.container);
+        if (!container) return null;
+        const els = Array.from(container.querySelectorAll(listCfg.item));
+        if (!els.length) return null;
+        let origin = '';
+        try { origin = new URL(seriesUrl).origin; } catch (e) {}
+        const seen = new Set();
+        const out = [];
+        for (const el of els) {
+            let it;
+            try { it = parser.parseListItem(el); } catch (e) { continue; }
+            if (!it || !it.src) continue;
+            // parseListItem 의 src 는 파서 getAbsoluteUrl(현재 location origin 기준)일 수 있다 →
+            //   pathname(+search)만 취해 seriesUrl origin 에 재결합(동일 사이트 자동 펼침에 안전).
+            let url;
+            try { const p = new URL(it.src, seriesUrl); url = (origin || p.origin) + p.pathname + (p.search || ''); }
+            catch (e) { continue; }
+            if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
+            seen.add(url);
+            out.push({ url, num: it.num || '', label: it.title || '' });
+        }
+        return out.length ? out : null;
+    } catch (e) { return null; }
+}
+
+/**
  * 시리즈를 회차로 펼쳐 /jobs 에 투입(각 unit에 정식 폴더명 series 동봉).
  * @param series 폴더명 오버라이드(버튼이 라이브 파서로 계산해 넘김). 없으면 가져온 doc에서 best-effort.
  */
 async function expandSeriesToJobs(cfg, seriesUrl, series, itemsOverride) {
     let items = itemsOverride, doc = null;
-    if (!items) { const r = await fetchChapterUrls(seriesUrl); items = r.urls; doc = r.doc; }
+    if (!items) {
+        const r = await fetchChapterUrls(seriesUrl);
+        doc = r.doc;
+        // 자동 펼침도 권위 회차번호/제목 동봉: 파서 룰을 fetch된 doc 에 재사용 시도.
+        //   성공 → units({url,num,label}), 실패 → 문자열 url 폴백(번호/제목 best-effort, 옛 동작).
+        const rich = await extractChapterItemsFromDoc(doc, seriesUrl);
+        items = (rich && rich.length) ? rich : r.urls;
+    }
     if (!items || !items.length) return { added: 0, skipped: 0, count: 0, folder: '' };
     const folder = series || (doc ? seriesFolderFromDoc(doc, seriesUrl) : '');
     // items 가 객체({url,num,label})면 권위 번호/제목 동봉(units), 문자열이면 urls.
