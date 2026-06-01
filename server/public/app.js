@@ -13,6 +13,16 @@
         logsel: 'toki.logsel',
     };
 
+    // 클라 버전 뱃지 기준 — 이 값 이상이면 최신(초록), 미만이면 구버전(빨강, 실제 버전 표기).
+    //   ⚠️ 빌드 시 docs 버전과 함께 갱신할 것. 버전 미전송 클라(260601-11 미만)는 버전을 모름.
+    const LATEST_CLIENT_VER = '260601-11';
+    function _parseVer(v) { const m = String(v || '').match(/(\d{6})-(\d+)/); return m ? { d: +m[1], n: +m[2] } : null; }
+    function _isOldVer(v) {
+        const c = _parseVer(v), L = _parseVer(LATEST_CLIENT_VER);
+        if (!c || !L) return true;
+        return c.d < L.d || (c.d === L.d && c.n < L.n);
+    }
+
     const $ = (id) => document.getElementById(id);
     let pollTimer = null;
 
@@ -360,11 +370,12 @@
                 const curLabel = cur ? ((cur.num ? cur.num + ' ' : '') + (cur.label || shortUrl(cur.url))) : '';
                 const curHtml = (c.online && curLabel)
                     ? `<div class="cc-current"><span class="ico">▶️</span>${esc(curLabel)}</div>` : '';
-                // 버전: 버전을 보내지 않는 클라(=구버전, 버전 동봉 코드 없음)는 "구버전" 경고로 표시.
+                // 버전: 버전을 보내면 실제 버전을 표기(구버전이면 빨강, 최신이면 초록).
+                //   버전 미전송(=260601-11 미만, 버전 동봉 코드 없음)은 실제 버전을 알 수 없어 "구버전?" 표기.
                 const verShort = c.version ? (String(c.version).split('custom.').pop() || c.version) : '';
                 const verHtml = verShort
-                    ? `<span class="ver">v${esc(verShort)}</span>`
-                    : `<span class="ver old">⚠ 구버전</span>`;
+                    ? `<span class="ver${_isOldVer(c.version) ? ' old' : ''}">v${esc(verShort)}</span>`
+                    : `<span class="ver old">구버전?</span>`;
                 return `<div class="client-card">
                     <div class="cc-head">
                         <span class="dot ${dot}"></span>
