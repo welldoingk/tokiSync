@@ -291,13 +291,39 @@ export class GenericParser extends BaseParser {
         return this._extractValue(document, meta.title);
     }
 
-    getSeriesMetadata() {
+    /** @param {Document} [root] 메타 추출 대상 문서. 생략 시 전역 document(현재 페이지).
+     *    멀티-IP 자동펼침은 부모 페이지가 아닌 fetch 한 시리즈 doc 을 넘겨 정확히 추출한다. */
+    getSeriesMetadata(root = document) {
         const meta = this.rule.meta || {};
+        let summary = this._extractValue(root, meta.summary) || "";
+        if (!summary) {
+            // 룰에 summary 셀렉터가 없는 사이트(remote 룰 미정의) 폴백 — 알려진 줄거리 컨테이너.
+            //   소설 .nd-desc / 만화 .hero-v2-desc. 둘 다 없으면 빈값(기존 동작).
+            for (const sel of ['.nd-desc', '.hero-v2-desc']) {
+                const e = root.querySelector(sel);
+                const t = e ? (e.innerText || e.textContent || '').trim() : '';
+                if (t) { summary = t; break; }
+            }
+        }
         return {
-            author: this._extractValue(document, meta.author) || "",
-            status: this._extractValue(document, meta.status) || "연재중",
-            summary: this._extractValue(document, meta.summary) || ""
+            author: this._extractValue(root, meta.author) || "",
+            status: this._extractValue(root, meta.status) || "연재중",
+            summary,
+            tags: this._extractTags(meta.tags, root)
         };
+    }
+
+    /** 장르 컨테이너에서 개별 태그 배열 추출 ("#판타지" 등 → ["판타지", ...]). root 생략 시 전역 document. */
+    _extractTags(selector, root = document) {
+        if (!selector) return [];
+        const sel = typeof selector === 'string' ? selector : selector.selector;
+        const container = root.querySelector(sel);
+        if (!container) return [];
+        const links = container.querySelectorAll('a');
+        const raw = links.length
+            ? Array.from(links).map(a => a.textContent)
+            : (container.innerText || '').split(/[#,\n]/);
+        return [...new Set(raw.map(s => s.replace(/[#\s]+/g, ' ').trim()).filter(Boolean))];
     }
 
     getViewerMetadata(viewerDocument) {
