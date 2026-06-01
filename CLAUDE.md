@@ -8,7 +8,7 @@
 | 서비스 | 상태 | 포트/경로 | 비고 |
 |---|---|---|---|
 | **유저스크립트 LAN 서빙** | **항상 켜짐** | `python3 -m http.server 8765` (cwd = 프로젝트 루트, bind `0.0.0.0`) | win-c(Windows)에서 설치/업데이트 소스 |
-| **원격 제어 컨트롤 API** | **필요 시 가동** | `server/control-api.js` 포트 **8787** | `node server/control-api.js` (zero-dep). 멀티-IP lease 오케스트레이터 |
+| **원격 제어 컨트롤 API** | **항상 켜짐 (systemd user)** | `server/control-api.js` 포트 **8787** | `tokisync-control-api.service` (zero-dep). 멀티-IP lease 오케스트레이터. 부팅 자동시작(linger) |
 
 - **호스트 LAN IP:** `192.168.0.100` (robocom 리눅스).
 - **유저스크립트 설치/업데이트 URL:** `http://192.168.0.100:8765/docs/tokiSync.user.js`
@@ -16,6 +16,18 @@
   - **8765 서버는 이미 떠 있으니 새로 띄우지 말 것**(중복 바인드 방지).
 - 컨트롤 API는 **VPN 내부망 전제**(외부 노출/터널 없음). 토큰(`server/config.json`의 `token`) 설정 권장,
   내부망이면 **open 모드(토큰 빈값)**도 허용. config.json은 git 무시(시크릿).
+
+### 컨트롤 API 서비스 관리 (systemd user)
+- **유닛 파일:** `~/.config/systemd/user/tokisync-control-api.service` (repo 밖, git 무시). `WorkingDirectory=server/`, node 절대경로 + `control-api.js` 실행. `Restart=on-failure`.
+- **관리 명령:**
+  ```bash
+  systemctl --user status tokisync-control-api      # 상태
+  systemctl --user restart tokisync-control-api     # 코드 변경/config.json 수정 후 재시작
+  systemctl --user stop tokisync-control-api         # 정지
+  journalctl --user -u tokisync-control-api -f       # 로그 팔로우
+  ```
+- **주의:** 서비스가 8787을 상시 점유하므로 `node server/control-api.js`를 **수동으로 또 띄우지 말 것**(중복 바인드 EADDRINUSE). 디버깅 시엔 서비스 stop 후 수동 실행.
+- **config.json 변경 반영:** 서비스는 기동 시 1회 로드 → 토큰/포트/telegram 바꾸면 `restart` 필요.
 
 ## 빌드 / 배포
 
