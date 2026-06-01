@@ -191,6 +191,7 @@ export class Store {
                 series: series || '',
                 label: (isObj && raw.label) ? String(raw.label).slice(0, 200) : urlLabel(url),
                 num: (isObj && raw.num != null && raw.num !== '') ? String(raw.num).slice(0, 20) : '',
+                cover: (isObj && raw.cover) ? String(raw.cover).slice(0, 500) : '', // 표지 URL(시리즈 공통) — EPUB cover.jpg 용
                 status: 'pending',
                 clientId: null,
                 leasedAt: 0,
@@ -460,6 +461,7 @@ export class Store {
             series: u.series,
             label: u.label,
             num: u.num || '',
+            cover: u.cover || '',
             status: u.status,
             clientId: u.clientId,
             expiresAt: u.expiresAt,

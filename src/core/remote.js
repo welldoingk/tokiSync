@@ -200,6 +200,14 @@ async function extractChapterItemsFromDoc(doc, seriesUrl) {
         if (!els.length) return null;
         let origin = '';
         try { origin = new URL(seriesUrl).origin; } catch (e) {}
+        // [표지] 시리즈 목록 doc 에서 표지 URL 1회 추출(rule.meta.thumb) → 모든 회차 unit 에 동봉.
+        //   각 회차 EPUB 에 cover.<ext> 로 삽입돼 Kavita 가 첫 회차 표지를 시리즈 대표로 사용.
+        let cover = '';
+        try {
+            const thumbCfg = parser.rule && parser.rule.meta && parser.rule.meta.thumb;
+            const t = (thumbCfg && typeof parser._extractValue === 'function') ? parser._extractValue(doc, thumbCfg) : '';
+            if (t) cover = new URL(t, seriesUrl).href;
+        } catch (e) {}
         const seen = new Set();
         const out = [];
         for (const el of els) {
@@ -213,7 +221,7 @@ async function extractChapterItemsFromDoc(doc, seriesUrl) {
             catch (e) { continue; }
             if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
             seen.add(url);
-            out.push({ url, num: it.num || '', label: it.title || '' });
+            out.push({ url, num: it.num || '', label: it.title || '', cover });
         }
         return out.length ? out : null;
     } catch (e) { return null; }
@@ -535,9 +543,12 @@ async function onExpandCurrentSeries() {
     let items = [];
     try {
         const parser = await ParserFactory.getParser();
+        // [표지] 라이브 파서로 표지 URL 1회 추출 → 모든 회차 unit 에 동봉(Kavita cover.jpg).
+        let cover = '';
+        try { cover = (parser && typeof parser.getThumbnailUrl === 'function' && parser.getThumbnailUrl()) || ''; } catch (e) {}
         const list = (parser && parser.getListItems) ? (await parser.getListItems()) || [] : [];
         if (list.length && parser.parseListItem) {
-            items = list.map((li) => { const it = parser.parseListItem(li); return { url: it.src, num: it.num, label: it.title }; })
+            items = list.map((li) => { const it = parser.parseListItem(li); return { url: it.src, num: it.num, label: it.title, cover }; })
                         .filter((u) => u.url && /^https?:\/\//i.test(u.url));
         }
     } catch (e) {}

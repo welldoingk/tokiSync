@@ -6,8 +6,8 @@ const fs = require('fs');
 const METADATA_MAIN = `// ==UserScript==
 // @name         TokiSync (Link to Drive) [LAN Custom]
 // @namespace    local://lan/tokisync-custom
-// @version      1.20.5-custom.260601-8
-// @description  Toki series sites -> Google Drive syncing tool (Bundled) — LAN custom build (클라 로그 heartbeat 증분 전송 → 대시보드 실시간 로그 패널)
+// @version      1.20.5-custom.260601-9
+// @description  Toki series sites -> Google Drive syncing tool (Bundled) — LAN custom build (소설 EPUB 표지 삽입: 시리즈 표지 URL 동봉 → cover.jpg → Kavita 시리즈 표지)
 // @author       pray4skylark + local patch
 // @updateURL    http://192.168.0.100:8765/docs/tokiSync.user.js
 // @downloadURL  http://192.168.0.100:8765/docs/tokiSync.user.js

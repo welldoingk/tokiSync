@@ -92,6 +92,28 @@ ${chapter.content}
             // Add NCX to manifest
             manifest += `<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>`;
 
+            // [표지] Kavita 는 파일명에 "cover" 든 이미지를 표지로 사용(OPF meta cover 필드는 무시).
+            //   → 실제 cover.<ext> 이미지 파일을 넣고, spine 첫 장(cover.xhtml)으로도 표시한다.
+            //   metadata.cover = { blob: Blob, type: 'image/...' }. 없으면 표지 생략(기존 동작).
+            let coverManifest = '', coverSpine = '', coverMeta = '', coverGuide = '';
+            const cover = metadata.cover;
+            if (cover && cover.blob) {
+                const ct = String(cover.type || 'image/jpeg').toLowerCase();
+                const ext = ct.includes('png') ? 'png' : ct.includes('webp') ? 'webp' : ct.includes('gif') ? 'gif' : 'jpg';
+                const coverImg = `cover.${ext}`;
+                oebps.file(coverImg, cover.blob);
+                oebps.file("cover.xhtml", `<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Cover</title><style type="text/css">body{margin:0;padding:0;text-align:center}img{max-width:100%;height:auto}</style></head>
+<body><div><img src="${coverImg}" alt="cover"/></div></body>
+</html>`);
+                coverManifest = `<item id="cover-image" href="${coverImg}" media-type="${ct}"/>\n        <item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>\n        `;
+                coverMeta = `        <meta name="cover" content="cover-image"/>\n`;
+                coverSpine = `<itemref idref="cover" linear="yes"/>\n        `;
+                coverGuide = `    <guide>\n        <reference type="cover" title="Cover" href="cover.xhtml"/>\n    </guide>\n`;
+            }
+
             const opf = `<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="2.0">
     <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
@@ -99,14 +121,14 @@ ${chapter.content}
         <dc:creator opf:role="aut">${xmlEsc(author)}</dc:creator>
         <dc:language>ko</dc:language>
         <dc:identifier id="BookId">${uid}</dc:identifier>
-${summary ? `        <dc:description>${xmlEsc(summary)}</dc:description>\n` : ''}${tags.map(t => `        <dc:subject>${xmlEsc(t)}</dc:subject>`).join('\n')}${tags.length ? '\n' : ''}${series ? `        <meta name="calibre:series" content="${xmlEsc(series)}"/>\n` : ''}${series && seriesIndex ? `        <meta name="calibre:series_index" content="${xmlEsc(seriesIndex)}"/>\n` : ''}    </metadata>
+${summary ? `        <dc:description>${xmlEsc(summary)}</dc:description>\n` : ''}${tags.map(t => `        <dc:subject>${xmlEsc(t)}</dc:subject>`).join('\n')}${tags.length ? '\n' : ''}${series ? `        <meta name="calibre:series" content="${xmlEsc(series)}"/>\n` : ''}${series && seriesIndex ? `        <meta name="calibre:series_index" content="${xmlEsc(seriesIndex)}"/>\n` : ''}${coverMeta}    </metadata>
     <manifest>
-        ${manifest}
+        ${coverManifest}${manifest}
     </manifest>
     <spine toc="ncx">
-        ${spine}
+        ${coverSpine}${spine}
     </spine>
-</package>`;
+${coverGuide}</package>`;
 
             oebps.file("content.opf", opf);
 

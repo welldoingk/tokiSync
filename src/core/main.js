@@ -10,7 +10,7 @@ import { fetchHistory } from './gas.js';
 import { ParserFactory } from './parsers/ParserFactory.js';
 import { getOAuthToken, fetchHistoryDirect } from './network.js';
 
-import { getCommonPrefix, blobToArrayBuffer, saveFile } from './utils.js';
+import { getCommonPrefix, blobToArrayBuffer, saveFile, fetchBlobWithXHR } from './utils.js';
 import { registerQueueMenu, maybeRunQueue } from './queue.js';
 import { registerRemoteMenu, startRemoteSync } from './remote.js';
 
@@ -77,12 +77,30 @@ async function downloadSingleEpisode(destination = 'local', unit = null) {
     const tempItem = { title: epTitle, src: episodeUrl, url: episodeUrl, num };
     await processItem(tempItem, builder, siteInfo, null, parser, seriesTitle, document);
 
+    // [표지] 소설 EPUB 에 Kavita 표지용 cover.<ext> 삽입.
+    //   lease 모드: expand 시 동봉한 unit.cover URL / 단일 모드: 라이브 파서 getThumbnailUrl().
+    //   @connect * 라 CDN(i.toonflix.app 등)도 fetchBlobWithXHR(GM_xmlhttpRequest)로 수신 가능.
+    let coverData = null;
+    if (isNovel && extension === 'epub') {
+        let coverUrl = (isLease && unit && unit.cover) ? unit.cover : '';
+        if (!coverUrl && typeof parser.getThumbnailUrl === 'function') {
+            try { coverUrl = parser.getThumbnailUrl() || ''; } catch (e) {}
+        }
+        if (coverUrl) {
+            try {
+                const b = await fetchBlobWithXHR(coverUrl);
+                if (b && b.size) coverData = { blob: b, type: b.type || 'image/jpeg' };
+            } catch (e) { logger.warn(`표지 다운로드 실패(건너뜀): ${e && e.message}`, 'Cover'); }
+        }
+    }
+
     logger.log('💾 파일 생성 및 저장 중...', 'System');
     const zip = await builder.build({
         series: workName || seriesTitle, title: epTitle, number: num,
         writer: seriesMeta.author || '', author: seriesMeta.author || '',
         summary: seriesMeta.summary || '', status: seriesMeta.status || '',
         tags: seriesMeta.tags || [], category: siteInfo.category,
+        cover: coverData,
     });
     const blob = await zip.generateAsync({ type: 'blob', compression: getCbzCompression() });
     const filename = `${num} - ${epTitle}`;
