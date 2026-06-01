@@ -342,10 +342,20 @@ export class GenericParser extends BaseParser {
      *    멀티-IP 자동펼침은 부모 페이지가 아닌 fetch 한 시리즈 doc 을 넘겨 정확히 추출한다. */
     getSeriesMetadata(root = document) {
         const meta = this.rule.meta || {};
+        let summary = this._extractValue(root, meta.summary) || "";
+        if (!summary) {
+            // 룰에 summary 셀렉터가 없는 사이트(remote 룰 미정의) 폴백 — 알려진 줄거리 컨테이너.
+            //   소설 .nd-desc / 만화 .hero-v2-desc. 둘 다 없으면 빈값(기존 동작).
+            for (const sel of ['.nd-desc', '.hero-v2-desc']) {
+                const e = root.querySelector(sel);
+                const t = e ? (e.innerText || e.textContent || '').trim() : '';
+                if (t) { summary = t; break; }
+            }
+        }
         return {
             author: this._extractValue(root, meta.author) || "",
             status: this._extractValue(root, meta.status) || "연재중",
-            summary: this._extractValue(root, meta.summary) || "",
+            summary,
             tags: this._extractTags(meta.tags, root)
         };
     }
