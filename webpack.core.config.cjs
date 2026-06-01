@@ -6,8 +6,8 @@ const fs = require('fs');
 const METADATA_MAIN = `// ==UserScript==
 // @name         TokiSync (Link to Drive) [LAN Custom]
 // @namespace    local://lan/tokisync-custom
-// @version      1.20.5-custom.260601-7
-// @description  Toki series sites -> Google Drive syncing tool (Bundled) — LAN custom build (lease 처리 루프화: 부모 탭 reload 제거 — 같은 페이지 반복 새로고침 문제 해결)
+// @version      1.20.5-custom.260601-8
+// @description  Toki series sites -> Google Drive syncing tool (Bundled) — LAN custom build (클라 로그 heartbeat 증분 전송 → 대시보드 실시간 로그 패널)
 // @author       pray4skylark + local patch
 // @updateURL    http://192.168.0.100:8765/docs/tokiSync.user.js
 // @downloadURL  http://192.168.0.100:8765/docs/tokiSync.user.js

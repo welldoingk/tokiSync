@@ -103,6 +103,7 @@ export class LogBox {
         if (LogBox.instance) return LogBox.instance;
         this.logs = [];
         this.MAX_LOGS = 500;
+        this._seq = 0; // 단조 증가 로그 seq — 원격 대시보드 증분 전송용(ring shift 와 무관하게 유지)
         this.init();
         LogBox.instance = this;
     }
@@ -200,8 +201,8 @@ export class LogBox {
         const prefix = context ? `[${context}] ` : '';
         const fullMsg = `[${time}] ${prefix}${msg}`;
         
-        // Save to memory
-        this.logs.push({ time, type, context, msg: typeof msg === 'string' ? msg : JSON.stringify(msg) });
+        // Save to memory (seq: 원격 대시보드 증분 전송 키)
+        this.logs.push({ seq: ++this._seq, time, type, context, msg: typeof msg === 'string' ? msg : JSON.stringify(msg) });
         if (this.logs.length > this.MAX_LOGS) this.logs.shift();
 
         const li = document.createElement('li');

@@ -35,7 +35,7 @@ import {
     CFG_REMOTE_CLIENT_ID,
     CFG_REMOTE_LEASE_MAX,
 } from './config.js';
-import { tokiAlert } from './ui.js';
+import { tokiAlert, LogBox } from './ui.js';
 import { ParserFactory } from './parsers/ParserFactory.js';
 import { getCommonPrefix } from './utils.js';
 
@@ -47,6 +47,20 @@ let _started = false;
 let _lastProgress = null;
 let _externalIp = '';   // 외부 IP(식별/검증용, 1회 조회 후 캐시)
 let _ipQueried = false;
+let _lastLogSeq = 0;    // 마지막으로 서버에 전송한 LogBox seq(로그 증분 전송 커서)
+
+/** LogBox 의 새 로그(마지막 전송 이후)를 증분 수집 — heartbeat 에 동봉해 대시보드로 스트림한다. */
+function _collectLogsSince() {
+    try {
+        const lb = LogBox.getInstance();
+        const all = (lb && lb.logs) || [];
+        const out = all
+            .filter((l) => l.seq > _lastLogSeq)
+            .map((l) => ({ seq: l.seq, time: l.time, type: l.type || 'normal', msg: (l.context ? `[${l.context}] ` : '') + l.msg }));
+        if (out.length) _lastLogSeq = out[out.length - 1].seq;
+        return out;
+    } catch (e) { return []; }
+}
 
 function _gv(k, d) {
     try { return typeof GM_getValue !== 'undefined' ? GM_getValue(k, d) : d; }
@@ -418,6 +432,7 @@ async function pollLease(cfg) {
                 running: isRunning(),
                 progress: _lastProgress,
                 current,
+                logs: _collectLogsSince(), // 새 로그 증분 동봉(대시보드 실시간 로그 패널용)
             },
         });
     } catch (e) {

@@ -10,6 +10,7 @@
         notify: 'toki.notify',
         wakelock: 'toki.wakelock',
         recent: 'toki.recent',
+        logsel: 'toki.logsel',
     };
 
     const $ = (id) => document.getElementById(id);
@@ -22,6 +23,8 @@
     let _leasedMap = {};         // clientId → [leased unit] (현재 처리 회차 표시용)
     let _wakeLock = null;        // Screen Wake Lock 센티넬
     let _audioCtx = null;        // 알림 비프용 (lazy)
+    let _logSel = '';            // 실시간 로그 패널에서 선택된 clientId
+    let _logSince = 0;           // 선택 클라의 마지막 수신 로그 seq(증분 커서)
 
     function getBase() {
         const b = (localStorage.getItem(LS.base) || '').trim().replace(/\/+$/, '');
@@ -374,6 +377,65 @@
     }
 
     let _paused = false;
+    // ── 실시간 로그 패널 ──
+    function clearLogStream(msg) {
+        const box = $('log-stream');
+        if (box) box.innerHTML = `<div class="empty">${esc(msg || '로그 수신 대기 중…')}</div>`;
+    }
+
+    // 클라 드롭다운을 최신 클라 목록으로 동기화(선택 유지, 없으면 첫 온라인 클라 자동 선택)
+    function updateLogClientOptions(clients) {
+        const sel = $('log-client');
+        if (!sel) return;
+        const ids = clients.map((c) => c.clientId);
+        if (_logSel && !ids.includes(_logSel)) _logSel = '';
+        if (!_logSel) {
+            const online = clients.find((c) => c.online);
+            _logSel = (online || clients[0] || {}).clientId || '';
+            _logSince = 0;
+        }
+        // 옵션 DOM은 목록/온라인 상태가 바뀔 때만 재구성(불필요한 깜빡임 방지)
+        const want = clients.map((c) => `${c.clientId}:${c.online ? 1 : 0}`).join(',');
+        if (sel._want !== want) {
+            sel._want = want;
+            sel.innerHTML = clients
+                .map((c) => `<option value="${esc(c.clientId)}">${esc(c.label || c.clientId)} ${c.online ? '●' : '○'}</option>`)
+                .join('') || '<option value="">(클라이언트 없음)</option>';
+        }
+        if (_logSel) sel.value = _logSel;
+    }
+
+    function appendLogs(logs) {
+        const box = $('log-stream');
+        if (!box) return;
+        const empty = box.querySelector('.empty');
+        if (empty) box.innerHTML = '';
+        const frag = document.createDocumentFragment();
+        for (const l of logs) {
+            const div = document.createElement('div');
+            div.className = 'log-line log-' + (l.type || 'normal');
+            div.textContent = `${l.time || ''} ${l.msg || ''}`;
+            frag.appendChild(div);
+        }
+        box.appendChild(frag);
+        while (box.children.length > 300) box.removeChild(box.firstChild); // DOM 라인 상한
+        const auto = $('log-autoscroll');
+        if (!auto || auto.checked) box.scrollTop = box.scrollHeight;
+    }
+
+    // 선택된 클라의 로그 증분 폴(refreshClients 주기에 묻어서 호출)
+    async function pollLogs() {
+        if (!_logSel) return;
+        try {
+            const r = await api(`/logs?clientId=${encodeURIComponent(_logSel)}&since=${_logSince}`);
+            const logs = r.logs || [];
+            if (logs.length) {
+                appendLogs(logs);
+                _logSince = r.lastSeq || _logSince;
+            }
+        } catch (_) { /* 구버전 서버/일시 오류 → 다음 주기 */ }
+    }
+
     async function refreshClients() {
         try {
             const data = await api('/clients');
@@ -390,6 +452,9 @@
             renderPool(data.pool || {});
             updateEtaAndAlerts(data.pool || {});
             renderClients(clients);
+            // 실시간 로그: 드롭다운 동기화 + 선택 클라 로그 증분 폴
+            updateLogClientOptions(clients);
+            await pollLogs();
             // 정지 상태 반영 (버튼 라벨 + 배지)
             _paused = !!data.paused;
             const btn = $('btn-pause');
@@ -594,6 +659,16 @@
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible' && localStorage.getItem(LS.wakelock) === '1') requestWakeLock();
         });
+        // 실시간 로그: 클라 선택 변경 시 스트림 초기화 + 증분 커서 리셋
+        _logSel = localStorage.getItem(LS.logsel) || '';
+        const logSelEl = $('log-client');
+        if (logSelEl) logSelEl.onchange = () => {
+            _logSel = logSelEl.value;
+            _logSince = 0;
+            localStorage.setItem(LS.logsel, _logSel);
+            clearLogStream(_logSel ? `${_logSel} 로그 수신 대기 중…` : '클라이언트를 선택하세요');
+            pollLogs();
+        };
         applyTheme();
         applyWakeLock();
         renderRecent();

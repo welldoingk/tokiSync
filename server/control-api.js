@@ -295,6 +295,15 @@ async function handleApi(req, res, url) {
         return sendJson(res, 200, { ok: true, units: store.listUnits(now(), status) });
     }
 
+    // GET /logs?clientId=X&since=N — 클라이언트별 로그 증분(대시보드 실시간 로그 패널)
+    if (method === 'GET' && pathname === '/logs') {
+        const clientId = sanitizeClientId(url.searchParams.get('clientId'));
+        if (!clientId) return sendJson(res, 400, { ok: false, error: 'clientId required' });
+        const sinceRaw = Number(url.searchParams.get('since'));
+        const since = Number.isFinite(sinceRaw) ? sinceRaw : 0;
+        return sendJson(res, 200, { ok: true, clientId, ...store.getClientLogs(clientId, since) });
+    }
+
     // POST /requeue {ids:[]} — stuck lease/failed unit 강제 재투입(운영 버튼)
     if (method === 'POST' && pathname === '/requeue') {
         const body = await parseBody(req, res);
@@ -338,6 +347,7 @@ const server = http.createServer(async (req, res) => {
             pathname === '/complete' ||
             pathname === '/clients' ||
             pathname === '/units' ||
+            pathname === '/logs' ||
             pathname === '/requeue' ||
             pathname.startsWith('/api');
 

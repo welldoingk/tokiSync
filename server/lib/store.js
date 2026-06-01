@@ -22,6 +22,7 @@ import { normalizeUrlKey, urlLabel } from './util.js';
 
 const MAX_COMMANDS = 200;
 const MAX_CAPTCHA = 50;
+const MAX_CLIENT_LOGS = 200;             // 클라이언트별 로그 ring 상한(휘발성, 대시보드 표시용)
 const MAX_EXPANSIONS = 20;               // 보관할 최근 expand 요청 수
 const EXPANSION_TTL_MS = 15 * 60 * 1000; // expand 요청 유효 시간(15분) — 이후 자동 만료
 const MAX_UNITS = 5000;                 // 작업 풀 상한 — 초과 시 오래된 done/failed부터 정리
@@ -341,6 +342,22 @@ export class Store {
      */
     setClientReport(clientId, report, now, ttlMs) {
         this._expire(now);
+        const prev = this.state.reports[clientId];
+        // 로그 ring 보존 + 증분 append(클라가 heartbeat 마다 마지막 전송 이후의 새 로그만 동봉).
+        const logs = (prev && Array.isArray(prev.logs)) ? prev.logs : [];
+        if (Array.isArray(report.logs) && report.logs.length) {
+            for (const l of report.logs) {
+                if (l && typeof l.msg === 'string') {
+                    logs.push({
+                        seq: Number(l.seq) || 0,
+                        time: String(l.time || ''),
+                        type: String(l.type || 'normal'),
+                        msg: l.msg.slice(0, 500),
+                    });
+                }
+            }
+            while (logs.length > MAX_CLIENT_LOGS) logs.shift();
+        }
         this.state.reports[clientId] = {
             label: report.label || clientId,
             ip: report.ip || '',
@@ -348,12 +365,23 @@ export class Store {
             running: !!report.running,
             progress: report.progress ?? null,
             current: Array.isArray(report.current) ? report.current : [],
+            logs,
             ts: now,
         };
         const ttl = ttlMs || DEFAULT_LEASE_TTL_MS;
         for (const u of this.state.units) {
             if (u.status === 'leased' && u.clientId === clientId) u.expiresAt = now + ttl;
         }
+    }
+
+    /** 클라이언트별 로그 증분 조회(대시보드 실시간 로그 패널). since 보다 큰 seq 만 반환 + 최신 seq. */
+    getClientLogs(clientId, since) {
+        const r = this.state.reports[clientId];
+        const all = (r && Array.isArray(r.logs)) ? r.logs : [];
+        const s = Number.isFinite(since) ? since : 0;
+        const logs = all.filter((l) => l.seq > s);
+        const lastSeq = all.length ? all[all.length - 1].seq : 0;
+        return { logs, lastSeq };
     }
 
     /**

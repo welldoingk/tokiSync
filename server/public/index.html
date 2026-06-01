@@ -20,24 +20,7 @@
             </div>
         </header>
 
-        <div class="panel">
-            <h2>시리즈 URL 추가</h2>
-            <textarea id="urls" placeholder="https://.../comic/12345&#10;https://.../webtoon/67890 (줄바꿈으로 여러 개)"></textarea>
-            <div class="row">
-                <button id="btn-add" class="primary">+ 큐에 추가</button>
-            </div>
-        </div>
-
-        <div class="panel">
-            <h2>제어 <small class="muted">(단일 모드)</small></h2>
-            <div class="row">
-                <button id="btn-start" class="blue">▶️ 시작</button>
-                <button id="btn-stop">⏸️ 정지</button>
-                <button id="btn-clear" class="danger">🗑️ 비우기</button>
-            </div>
-            <div id="progress" class="progress"></div>
-        </div>
-
+        <!-- ── 멀티-IP 작업 풀 (모니터 우선 상단) ── -->
         <div class="panel" id="pool-panel">
             <h2>🌐 멀티-IP 작업 풀 <span id="pause-badge"></span></h2>
             <div id="pool-bar" class="pool-bar"></div>
@@ -55,8 +38,19 @@
             <div id="clients" class="clients-list"><div class="empty">대기 중…</div></div>
         </div>
 
+        <!-- ── 실시간 로그 (전용 패널 + 클라 선택) ── -->
+        <div class="panel" id="log-panel">
+            <div class="log-head">
+                <h2>📜 실시간 로그</h2>
+                <select id="log-client" class="log-select" title="클라이언트 선택"></select>
+                <label class="log-autoscroll"><input type="checkbox" id="log-autoscroll" checked />자동 스크롤</label>
+            </div>
+            <div id="log-stream" class="log-stream"><div class="empty">온라인 클라이언트를 선택하면 로그가 실시간으로 표시됩니다.</div></div>
+        </div>
+
+        <!-- ── 작업 투입 (멀티-IP 분배) ── -->
         <div class="panel" id="jobs-panel">
-            <h2>작업 투입 (멀티-IP 분배)</h2>
+            <h2>➕ 작업 투입 (멀티-IP 분배)</h2>
 
             <div class="dsx-section" style="margin-bottom:12px">
                 <label>⚡ 작품 메인 URL 자동 펼침 (전체 회차)</label>
@@ -96,16 +90,37 @@
             </div>
         </div>
 
-        <div class="panel">
-            <h2>대기열 (<span id="q-count">0</span>)</h2>
-            <div id="queue" class="queue-list"><div class="empty">로딩 중…</div></div>
-        </div>
-
+        <!-- ── 캡차 알림 (발생 시만) ── -->
         <div class="panel" id="captcha-panel" style="display:none">
             <h2>⚠️ 캡차 알림</h2>
             <div id="captcha"></div>
         </div>
 
+        <!-- ── 단일 모드 (하단 접기 강등) ── -->
+        <div class="panel">
+            <details id="single-mode">
+                <summary>▸ 단일 모드 (시리즈 일괄 다운로드 · 대기열)</summary>
+                <div class="single-body">
+                    <label class="muted" style="display:block;margin-bottom:4px">시리즈 URL 추가</label>
+                    <textarea id="urls" placeholder="https://.../comic/12345&#10;https://.../webtoon/67890 (줄바꿈으로 여러 개)"></textarea>
+                    <div class="row">
+                        <button id="btn-add" class="primary">+ 큐에 추가</button>
+                    </div>
+
+                    <div class="row" style="margin-top:14px">
+                        <button id="btn-start" class="blue">▶️ 시작</button>
+                        <button id="btn-stop">⏸️ 정지</button>
+                        <button id="btn-clear" class="danger">🗑️ 비우기</button>
+                    </div>
+                    <div id="progress" class="progress"></div>
+
+                    <h2 style="margin-top:14px">대기열 (<span id="q-count">0</span>)</h2>
+                    <div id="queue" class="queue-list"><div class="empty">로딩 중…</div></div>
+                </div>
+            </details>
+        </div>
+
+        <!-- ── 연결 설정 ── -->
         <div class="panel">
             <details>
                 <summary>⚙️ 연결 설정</summary>
