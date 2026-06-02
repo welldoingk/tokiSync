@@ -374,6 +374,19 @@ const sleepJitter = (minMs, maxMs) => {
   return new Promise(resolve => setTimeout(resolve, delay));
 };
 
+const focusWorkerPopup = (popupRef, context = 'worker') => {
+  try {
+    if (popupRef && !popupRef.closed && typeof popupRef.focus === 'function') {
+      popupRef.focus();
+      console.log(`[Queue Scheduler] 🔎 ${context} 팝업 포커스 신호 전송`);
+      return true;
+    }
+  } catch (err) {
+    console.warn(`[Queue Scheduler] ${context} 팝업 포커스 실패:`, err);
+  }
+  return false;
+};
+
 /**
  * 1회성 스케줄링 기동 검사 (세마포어 알고리즘)
  */
@@ -484,11 +497,13 @@ export const runSchedulerOnce = async () => {
             } else {
                 recycledPopup.location.href = nextItem.episodeUrl;
             }
+            focusWorkerPopup(recycledPopup, '재사용');
         } catch (err) {
             console.error('[Queue Scheduler] 기존 팝업 location.replace 실패, href 리다이렉션 시도:', err);
             try {
                 recycledPopup.location.href = nextItem.episodeUrl;
                 activeWorkers.set(nextItem.id, recycledPopup);
+                focusWorkerPopup(recycledPopup, '재사용 폴백');
             } catch (hrefErr) {
                 console.error('[Queue Scheduler] 팝업 릴레이 강제 실패:', hrefErr);
             }
@@ -498,6 +513,7 @@ export const runSchedulerOnce = async () => {
         const popupRef = openEpisodePopup(nextItem.episodeUrl, nextItem.id);
         if (popupRef) {
             activeWorkers.set(nextItem.id, popupRef);
+            focusWorkerPopup(popupRef, '신규');
         } else {
             // 팝업 차단 등으로 창 생성 실패 시 즉시 failed 처리
             updateQueueItem(nextItem.id, { 

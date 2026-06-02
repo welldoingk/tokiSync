@@ -192,6 +192,14 @@ export async function scrollToLoad(iframeDoc, stallTimeoutMs = 20000, viewerCfg 
     const win = iframeDoc.defaultView || iframeDoc.parentWindow;
     if (!win) return;
 
+    try {
+        if (typeof win.focus === 'function') {
+            win.focus();
+        }
+    } catch (e) {
+        console.warn('[ScrollEngine] 워커 팝업 포커스 신호 실패:', e.message);
+    }
+
     const isHidden = document.visibilityState === 'hidden';
     const behavior = isHidden ? 'auto' : 'smooth';
     const logger = LogBox.getInstance();

@@ -49,6 +49,14 @@ export function initWorkerExtractor() {
         if (msg.type === 'START_EXTRACTION') {
             const { queueId } = msg.payload;
 
+            try {
+                if (typeof window.focus === 'function') {
+                    window.focus();
+                }
+            } catch (e) {
+                console.warn('[TokiSync:Worker] 팝업 포커스 신호 실패:', e.message);
+            }
+
             // CF Challenge Check
             const isCloudflare = document.title.includes('Just a moment') ||
                                  document.getElementById('cf-challenge-running') ||

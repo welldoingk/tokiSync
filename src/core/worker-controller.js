@@ -16,6 +16,19 @@ function isLeaseQueueItem(item) {
     return !!(item && item.unitId);
 }
 
+function focusWorkerWindow(workerRef, context = 'worker') {
+    try {
+        if (workerRef && !workerRef.closed && typeof workerRef.focus === 'function') {
+            workerRef.focus();
+            console.log(`[WorkerController] 🔎 ${context} 워커 팝업 포커스 신호 전송`);
+            return true;
+        }
+    } catch (err) {
+        console.warn(`[WorkerController] ${context} 워커 팝업 포커스 실패:`, err);
+    }
+    return false;
+}
+
 /**
  * Close active single worker popup window
  */
@@ -61,6 +74,7 @@ async function fetchMediaViaWorkerSingleAttempt(episodeUrl, targetType = 'novel'
 
                 if (activeWorkerRef && !activeWorkerRef.closed) {
                     console.log(`[WorkerController] 📢 READY 수신 ➡️ 지시 주입 (유형: ${targetType})`);
+                    focusWorkerWindow(activeWorkerRef, '단일');
                     
                     // Inject metadata bundle for local self-contained execution
                     sendToWorker(activeWorkerRef, 'START_EXTRACTION', {
@@ -170,6 +184,7 @@ async function fetchMediaViaWorkerSingleAttempt(episodeUrl, targetType = 'novel'
                     activeWorkerRef.location.href = episodeUrl;
                     activeWorkerRef.name = 'tokisync-novel-worker';
                 }
+                focusWorkerWindow(activeWorkerRef, '단일 재사용');
             } else {
                 console.log('[WorkerController] 신규 단일 워커 팝업 기동:', episodeUrl);
                 activeWorkerRef = window.open(
@@ -180,6 +195,7 @@ async function fetchMediaViaWorkerSingleAttempt(episodeUrl, targetType = 'novel'
                 if (!activeWorkerRef) {
                     throw new Error('브라우저 팝업 차단이 감지되었습니다.');
                 }
+                focusWorkerWindow(activeWorkerRef, '단일 신규');
             }
         } catch (err) {
             cleanup();
@@ -339,6 +355,7 @@ export function initBatchWorkerController() {
                 
                 if (item) {
                     console.log(`[WorkerController] 📢 [배치] READY 수신 (ID: ${matchedId}) ➡️ START_EXTRACTION 주입`);
+                    focusWorkerWindow(sourceEvent.source, `배치 ${matchedId}`);
                     
                     sendToWorker(sourceEvent.source, 'START_EXTRACTION', {
                         queueId: item.id,
