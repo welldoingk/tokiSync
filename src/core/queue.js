@@ -469,38 +469,25 @@ export const runSchedulerOnce = async () => {
     }
 
     if (recycledPopup) {
-        const targetWindowName = `tokisync_novel_worker_${targetSlotId}`.replace(/[^a-zA-Z0-9_]/g, '');
-        const newWindowName = `tokisync_novel_worker_${nextItem.id}`.replace(/[^a-zA-Z0-9_]/g, '');
-
-        console.log(`[Queue Scheduler] ♻️ 기존 자식 팝업 슬롯 재사용 (이름: ${targetWindowName} -> 신규: ${newWindowName})`);
+        console.log(`[Queue Scheduler] ♻️ 기존 자식 팝업 슬롯 재사용 (ID: ${targetSlotId} -> ${nextItem.id})`);
         // activeWorkers 정리 및 교체
         activeWorkers.delete(targetSlotId);
         activeWorkers.set(nextItem.id, recycledPopup);
+        closedCounts.delete(targetSlotId);
+        closedCounts.set(nextItem.id, 0);
 
         try {
-            // [CORS 우회 우주 표준 기법] 기존 window.name을 타겟으로 window.open을 호출하면
-            // 새 창을 띄우지 않고 동일 팝업창 내에서 URL 리다이렉션이 성공하며, 팝업 차단막도 우회합니다!
-            const width = 400;
-            const height = 600;
-            const left = window.screen.width - width - 50;
-            const top = 100;
-            
-            const updatedPopup = window.open(
-                nextItem.episodeUrl,
-                targetWindowName,
-                `width=${width},height=${height},left=${left},top=${top},noopener=false,scrollbars=yes,resizable=yes`
-            );
-            
-            if (updatedPopup) {
-                // 통신 식별자 갱신
-                updatedPopup.name = newWindowName;
-                activeWorkers.set(nextItem.id, updatedPopup);
+            // 기존 window.name을 다시 타겟으로 쓰면, 이전 릴레이에서 name이 바뀐 경우
+            // 브라우저가 같은 창을 못 찾아 새 팝업을 만든다. 보관 중인 Window 참조를 직접 이동시킨다.
+            if (recycledPopup.location && typeof recycledPopup.location.replace === 'function') {
+                recycledPopup.location.replace(nextItem.episodeUrl);
+            } else {
+                recycledPopup.location.href = nextItem.episodeUrl;
             }
         } catch (err) {
-            console.error('[Queue Scheduler] 릴레이 window.open 우회 실패, 일반 리다이렉션 시도:', err);
+            console.error('[Queue Scheduler] 기존 팝업 location.replace 실패, href 리다이렉션 시도:', err);
             try {
                 recycledPopup.location.href = nextItem.episodeUrl;
-                recycledPopup.name = newWindowName;
                 activeWorkers.set(nextItem.id, recycledPopup);
             } catch (hrefErr) {
                 console.error('[Queue Scheduler] 팝업 릴레이 강제 실패:', hrefErr);
