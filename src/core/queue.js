@@ -19,6 +19,7 @@ export const WORKER_STAGE = {
 const STORAGE_KEY = 'tokisync_download_queue';
 const MAX_CONCURRENCY = 2; // 최대 동시 다운로드 수
 const LEASE_MAX_CONCURRENCY = 1; // 멀티-IP lease 모드는 보유 수와 실행 수를 분리해 클라당 1개씩 처리
+const ORPHAN_PROCESSING_GRACE_MS = 15000;
 
 // 임시 팝업 창 참조 보관용 맵 (Liveness check 및 재활용 루프 대비)
 export const activeWorkers = new Map();
@@ -399,7 +400,7 @@ export const runSchedulerOnce = async () => {
   isSchedulerRunning = true;
 
   try {
-    const queue = getRawQueue();
+    let queue = getRawQueue();
     
     // Liveness Check: 실제 열려있는 팝업 중 닫힌 팝업이 있는지 감지하여 failed 전이
     for (const [id, popupRef] of activeWorkers.entries()) {
@@ -428,6 +429,30 @@ export const runSchedulerOnce = async () => {
         // 정상 기동 확인 시 유예 카운터 즉시 리셋
         closedCounts.set(id, 0);
       }
+    }
+
+    const now = Date.now();
+    let recoveredOrphans = false;
+    for (const item of queue) {
+      if (!item || item.status !== 'processing' || activeWorkers.has(item.id)) continue;
+      const startedAt = Number(item.startedAt || 0);
+      if (startedAt && now - startedAt < ORPHAN_PROCESSING_GRACE_MS) continue;
+
+      const nextRetry = (item.retryCount || 0) + 1;
+      console.warn(`[Queue Scheduler] ⚠️ 워커 참조 유실 orphan processing 복구: ${item.episodeTitle || item.id} (${nextRetry}/3)`);
+      updateQueueItem(item.id, {
+        status: nextRetry >= 3 ? 'failed' : 'pending',
+        retryCount: nextRetry,
+        stage: nextRetry >= 3 ? WORKER_STAGE.FAILED : WORKER_STAGE.INIT,
+        progressPercent: 0,
+        startedAt: 0,
+        lastProgressAt: 0,
+        errorMsg: '워커 팝업 참조가 유실되어 자동 복구했습니다.'
+      });
+      recoveredOrphans = true;
+    }
+    if (recoveredOrphans) {
+      queue = getRawQueue();
     }
 
     // 1. 현재 processing(작업 중) 상태인 큐 아이템의 개수를 산출

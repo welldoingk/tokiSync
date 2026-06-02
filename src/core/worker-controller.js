@@ -41,6 +41,7 @@ function kickRemotePoll(reason, queueId) {
 
 const PAGE_LOAD_STALL_TIMEOUT_MS = 90000;
 const WORKER_PROGRESS_STALL_TIMEOUT_MS = 180000;
+const ORPHAN_PROCESSING_GRACE_MS = 15000;
 
 function shortText(value, maxLen = 90) {
     const text = value == null ? '' : String(value);
@@ -430,6 +431,20 @@ export function initBatchWorkerController() {
                     }
                 }
             }
+        }
+
+        for (const item of queue) {
+            if (!item || item.status !== 'processing' || activeWorkers.has(item.id)) continue;
+            const startedAt = Number(item.startedAt || 0);
+            if (startedAt && now - startedAt < ORPHAN_PROCESSING_GRACE_MS) continue;
+            recoverStalledBatchWorker(
+                item.id,
+                null,
+                item,
+                `워커 참조 유실 orphan processing${startedAt ? ` ${Math.round((now - startedAt) / 1000)}초` : ''}`,
+                logger,
+                batchClosedCounts
+            );
         }
     }, 2000);
 
