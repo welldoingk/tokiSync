@@ -1,13 +1,14 @@
 const path = require('path');
 const webpack = require('webpack');
 const fs = require('fs');
+const TerserPlugin = require('terser-webpack-plugin');
 
 // Metadata Block
 const METADATA_MAIN = `// ==UserScript==
-// @name         TokiSync (Link to Drive) [LAN Custom]
+// @name         TokiSync (Link to Drive) [LAN Custom v1.21]
 // @namespace    local://lan/tokisync-custom
-// @version      1.20.5-custom.260601-13
-// @description  Toki series sites -> Google Drive syncing tool (Bundled) — LAN custom build (소설 줄거리(summary) 폴백 셀렉터 .nd-desc — remote 룰 미정의 보완)
+// @version      1.21.5-multi.260602-9
+// @description  Toki series sites -> NAS/Drive syncing (Bundled) — LAN custom: 멀티-IP lease + 네이티브 NAS(WebDAV) on upstream v1.21.5
 // @author       pray4skylark + local patch
 // @updateURL    http://192.168.0.100:8765/docs/tokiSync.user.js
 // @downloadURL  http://192.168.0.100:8765/docs/tokiSync.user.js
@@ -22,8 +23,8 @@ const METADATA_MAIN = `// ==UserScript==
 // @match        https://script.google.com/*
 // @match        https://*.github.io/tokiSync/*
 // @match        https://pray4skylark.github.io/tokiSync/*
-// @match        http://localhost:*/*
-// @match        http://127.0.0.1:*/*
+// @include      http://localhost:*/*
+// @include      http://127.0.0.1:*/*
 // @icon         https://github.com/user-attachments/assets/99f5bb36-4ef8-40cc-8ae5-e3bf1c7952ad
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -62,8 +63,8 @@ const METADATA_NEW_CORE = `// ==UserScript==
 // @include      *://*toki*/*
 // @include      *://*toon*/*
 // @match        https://pray4skylark.github.io/tokiSync/*
-// @match        http://localhost:*/*
-// @match        http://127.0.0.1:*/*
+// @include      http://localhost:*/*
+// @include      http://127.0.0.1:*/*
 // @icon         https://github.com/user-attachments/assets/99f5bb36-4ef8-40cc-8ae5-e3bf1c7952ad
 // @grant        GM_registerMenuCommand
 // @grant        GM_xmlhttpRequest
@@ -112,7 +113,19 @@ module.exports = {
       },
     ],
   },
-  optimization: { minimize: false },
+  optimization: {
+    minimize: false,
+    minimizer: [
+      new TerserPlugin({
+        extractComments: false, // 주석을 외부 라이선스 파일로 쪼개서 추출 분리하는 현상 차단
+        terserOptions: {
+          format: {
+            comments: /==UserScript==|@name|@namespace|@version|@description|@author|@updateURL|@downloadURL|@match|@include|@icon|@grant|@connect|@require|@run-at|@license/i, // 유저스크립트 필수 헤더 규격 주석의 안전 보존
+          },
+        },
+      }),
+    ],
+  },
   plugins: [
     new webpack.BannerPlugin({
       banner: METADATA_MAIN,

@@ -146,18 +146,10 @@ export class GenericParser extends BaseParser {
             return [];
         }
 
-        let items = Array.from(container.querySelectorAll(listCfg.item));
-        // [hardening] 컨테이너가 존재해도 항목이 아직 0개일 수 있다 — SPA 소프트 내비게이션·배경탭
-        // 타이머 스로틀로 SSR 목록의 DOM 파싱/하이드레이션이 파서 조회 순간 덜 끝난 경우.
-        // 그대로 반환하면 "에피소드 목록이 0개" 오탐 → 항목이 채워질 때까지(첫 item 출현) 대기한다.
-        if (items.length === 0 && listCfg.item) {
-            console.log(`[GenericParser] 컨테이너(${listCfg.container})는 있으나 항목 0개 → 목록 로딩 대기...`);
-            const firstItem = await this.waitForSelector(`${listCfg.container} ${listCfg.item}`, 8000);
-            if (firstItem) {
-                container = document.querySelector(listCfg.container) || container;
-                items = Array.from(container.querySelectorAll(listCfg.item));
-            }
-        }
+        const items = Array.from(container.querySelectorAll(listCfg.item));
+        // Reverse if it's a typical episode list where latest is on top but we need chronological for some logic?
+        // Actually, TokiParser reverses. Let's check if we should always reverse.
+        // For now, return as is.
         return items;
     }
 
@@ -212,45 +204,23 @@ export class GenericParser extends BaseParser {
         if (viewerCfg.imageRegex) {
             const html = iframeDocument.documentElement.innerHTML || iframeDocument.body.innerHTML;
             const regex = new RegExp(viewerCfg.imageRegex, 'g');
-
-            // [custom] URL 차단 패턴 — Regex 경로에서도 적용 (DOM 추출 경로와 동일 의미론)
-            const urlExcludeRawRegex = viewerCfg.urlExclude || viewerCfg.urlBlocklist;
-            const urlExcludeListRegex = urlExcludeRawRegex
-                ? (Array.isArray(urlExcludeRawRegex) ? urlExcludeRawRegex : [urlExcludeRawRegex])
-                : [];
-            const isUrlBlockedRegex = (url) => {
-                if (!url) return false;
-                return urlExcludeListRegex.some(p => {
-                    if (typeof p !== 'string') return false;
-                    if (p.length > 2 && p.startsWith('/') && p.endsWith('/')) {
-                        try { return new RegExp(p.slice(1, -1)).test(url); } catch (e) { return false; }
-                    }
-                    return url.includes(p);
-                });
-            };
-
             const urls = [];
-            let blockedCount = 0;
             let match;
-
+            
             while ((match = regex.exec(html)) !== null) {
                 // 캡처 그룹이 있으면 그것을, 없으면 전체 매치(match[0])를 사용
                 let url = match[1] || match[0];
                 url = url.replace(/\\/g, ''); // 불필요한 이스케이프 백슬래시(\) 제거
-
-                if (this.isDummyUrl(url)) continue;
-                if (isUrlBlockedRegex(url)) { blockedCount++; continue; }
-                urls.push(this.getAbsoluteUrl(url));
+                
+                if (!this.isDummyUrl(url)) {
+                    urls.push(this.getAbsoluteUrl(url));
+                }
             }
-
+            
             // 중복 제거 후 리턴 (정규식 특성상 중복 캡처 가능성 높음)
             const uniqueUrls = Array.from(new Set(urls));
             if (uniqueUrls.length > 0) {
-                if (blockedCount > 0) {
-                    console.log(`[GenericParser] Regex 기반 ${uniqueUrls.length}개 추출, urlExclude로 ${blockedCount}개 차단`);
-                } else {
-                    console.log(`[GenericParser] Regex 기반 이미지 추출 성공: ${uniqueUrls.length}개 발견`);
-                }
+                console.log(`[GenericParser] Regex 기반 이미지 추출 성공: ${uniqueUrls.length}개 발견`);
                 return uniqueUrls.map(url => ({ url, isDummy: false }));
             } else {
                 console.warn(`[GenericParser] Regex 설정이 있으나 매칭되는 이미지를 찾지 못했습니다.`);
@@ -283,22 +253,6 @@ export class GenericParser extends BaseParser {
 
         const imgs = Array.from(container.querySelectorAll(viewerCfg.imageItem || 'img'));
 
-        // [custom] URL 차단 패턴 (substring 또는 /regex/) — 광고 CDN 경로 등 차단
-        const urlExcludeRaw = viewerCfg.urlExclude || viewerCfg.urlBlocklist;
-        const urlExcludeList = urlExcludeRaw
-            ? (Array.isArray(urlExcludeRaw) ? urlExcludeRaw : [urlExcludeRaw])
-            : [];
-        const isUrlBlocked = (url) => {
-            if (!url) return false;
-            return urlExcludeList.some(p => {
-                if (typeof p !== 'string') return false;
-                if (p.length > 2 && p.startsWith('/') && p.endsWith('/')) {
-                    try { return new RegExp(p.slice(1, -1)).test(url); } catch (e) { return false; }
-                }
-                return url.includes(p);
-            });
-        };
-
         return imgs.map(img => {
             let foundUrl = null;
             // [v1.8.1] 동적 키가 발견되면 최우선 순위로 설정하여 탐지 성공률 극대화
@@ -319,10 +273,9 @@ export class GenericParser extends BaseParser {
             }
 
             const finalUrl = foundUrl || this.getAbsoluteUrl(img.src) || "";
-            const blocked = isUrlBlocked(finalUrl);
             return {
                 url: finalUrl,
-                isDummy: this.isDummyUrl(finalUrl) || blocked
+                isDummy: this.isDummyUrl(finalUrl)
             };
         });
     }
@@ -360,7 +313,7 @@ export class GenericParser extends BaseParser {
         };
     }
 
-    /** 장르 컨테이너에서 개별 태그 배열 추출 ("#판타지" 등 → ["판타지", ...]) */
+    /** 장르 컨테이너에서 개별 태그 배열 추출 ("#판타지" 등 → ["판타지", ...]). root 생략 시 전역 document. */
     _extractTags(selector, root = document) {
         if (!selector) return [];
         const sel = typeof selector === 'string' ? selector : selector.selector;
@@ -375,29 +328,10 @@ export class GenericParser extends BaseParser {
 
     getViewerMetadata(viewerDocument) {
         const viewerCfg = this.rule.viewer || {};
-
-        let seriesTitle = this._extractValue(viewerDocument, viewerCfg.seriesTitle) || "";
-        let episodeTitle = this._extractValue(viewerDocument, viewerCfg.episodeTitle) || "";
-        let episodeNum = this._extractValue(viewerDocument, viewerCfg.episodeNum) || "";
-
-        // [fallback] 룰에 뷰어 메타 셀렉터가 없는 사이트(예: sbxh 만화)는 페이지 제목을 파싱.
-        //   형식: "작품명 N화 | 뉴토끼" → series="작품명", episode="N화", num="N".
-        if (!seriesTitle || !episodeTitle || !episodeNum) {
-            const clean = ((viewerDocument && viewerDocument.title) || "").replace(/\s*[|｜].*$/, "").trim();
-            const m = clean.match(/^(.*?)\s+(\d+(?:\.\d+)?)\s*(화|권|話|회|장|부)\s*$/);
-            if (m) {
-                if (!seriesTitle) seriesTitle = m[1].trim();
-                if (!episodeTitle) episodeTitle = m[2] + m[3];
-                if (!episodeNum) episodeNum = m[2];
-            } else if (clean) {
-                if (!seriesTitle) seriesTitle = clean;
-                if (!episodeTitle) episodeTitle = clean;
-            }
-        }
-
-        seriesTitle = seriesTitle || "UnknownSeries";
-        episodeTitle = episodeTitle || "UnknownEpisode";
-        episodeNum = episodeNum || "0000";
+        
+        let seriesTitle = this._extractValue(viewerDocument, viewerCfg.seriesTitle) || "UnknownSeries";
+        let episodeTitle = this._extractValue(viewerDocument, viewerCfg.episodeTitle) || "UnknownEpisode";
+        let episodeNum = this._extractValue(viewerDocument, viewerCfg.episodeNum) || "0000";
 
         // Clean up episodeNum
         const match = episodeNum.match(/(\d+)/);

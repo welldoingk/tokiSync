@@ -1,31 +1,32 @@
 /**
- * 원격 제어 폴링 어댑터
+ * 원격 제어 폴링 어댑터 (멀티-IP lease ↔ upstream v1.21.0 queue API)
  *
  * 컨트롤 API 서버(server/control-api.js)를 주기적으로 폴링해서:
- *   - 명령(add/start/stop/clear/remove)을 받아 로컬 큐(queue.js)에 적용
- *   - 로컬 큐/실행상태/진행률을 POST /progress 로 미러 보고 (대시보드 표시용)
- *   - 캡차 감지 이벤트 수신 시 POST /captcha 로 보고 (서버가 텔레그램 발송)
+ *   - lease 모드(clientId 설정): /lease 로 unit 을 원자 임대 → addEpisodesToQueue 로 로컬 큐에 주입.
+ *     upstream 의 이벤트 기반 스케줄러(initQueueScheduler)가 큐 변동을 감지해 워커 팝업을 자동 기동.
+ *     큐 item 의 status('completed'|'failed') 를 보고 /complete 로 결과 보고(중복 없는 회차 분배).
+ *   - /progress 로 clientId·외부IP·진행률·보유 unit heartbeat(서버가 lease TTL 갱신).
+ *   - 작품 자동 펼침(/jobs)·캡차 격리(/captcha) 처리.
  *
- * 설계 원칙:
- *   - 서버는 "원격 제어 평면(control plane)", 로컬 GM 큐는 "실행 엔진".
- *   - 명령은 단조 증가 seq를 가지며, 적용한 마지막 seq를 GM에 영속화해 중복 적용 방지.
- *   - 'start' 명령은 페이지 내비게이션(reload)을 유발하므로 적용 전에 seq를 먼저 저장
- *     → 새로고침 후 같은 명령이 재실행되어 무한 reload되는 것을 방지.
- *   - 최초 부착(lastSeq 미설정) 시에는 서버의 현재 seq를 기준선으로 채택하고
- *     과거 명령 백로그는 재생하지 않는다(스크립트 재시작 시 옛 URL 재추가 방지).
+ * upstream 연동 요지(이전 feature 브랜치 대비 변경점):
+ *   - 우리 전용 큐 함수(addLeasedUnits/runLeaseQueue/startQueue/stopQueue/isRunning/pathKey/saveQueue)
+ *     → upstream queue.js API(addEpisodesToQueue/getQueue/updateQueueItem/initQueueScheduler/
+ *        setQueuePaused/getQueuePaused) 로 교체.
+ *   - 큐 item 상태값은 upstream 컨벤션('completed'/'failed') 사용(이전 'done'/'error' 아님).
+ *   - 큐 구동은 reload/navigation 이 아니라 GM_addValueChangeListener 이벤트 스케줄러가 담당.
+ *     remote 는 큐에 주입만 하고 스케줄러를 1회 init 한다(runScheduler 직접 호출 금지).
+ *   - 서버 unit.id 는 episodes 커스텀 필드 unitId 로 동봉 → 완료 시 그걸로 /complete(큐 item id 와 별개).
  */
 import {
-    addUrls,
-    addLeasedUnits,
-    startQueue,
-    stopQueue,
-    clearQueue,
+    addEpisodesToQueue,
     getQueue,
-    saveQueue,
-    isRunning,
-    pathKey,
-    runLeaseQueue,
+    updateQueueItem,
+    initQueueScheduler,
+    setQueuePaused,
+    stopAllWorkers,
+    clearQueue,
 } from './queue.js';
+import { initBatchWorkerController } from './worker-controller.js';
 import {
     getRemoteConfig,
     CFG_REMOTE_ENABLED,
@@ -35,19 +36,26 @@ import {
     CFG_REMOTE_CLIENT_ID,
     CFG_REMOTE_LEASE_MAX,
 } from './config.js';
-import { tokiAlert, LogBox } from './ui.js';
+import { LogBox } from './ui.js';
 import { ParserFactory } from './parsers/ParserFactory.js';
 import { getCommonPrefix } from './utils.js';
 
-const K_LAST_SEQ = 'TOKI_REMOTE_LAST_SEQ';
 const K_DONE_EXP = 'TOKI_REMOTE_DONE_EXPANSIONS'; // 이미 처리한 expand 요청 id (중복 펼침 방지)
 
 let _timer = null;
 let _started = false;
+let _schedulerInited = false;
+let _lastClearSeq = null; // 서버 풀 비우기(/jobs/clear) 신호 추적 — 첫 연결은 동기화만, 이후 증가 감지 시 정리
 let _lastProgress = null;
 let _externalIp = '';   // 외부 IP(식별/검증용, 1회 조회 후 캐시)
 let _ipQueried = false;
 let _lastLogSeq = 0;    // 마지막으로 서버에 전송한 LogBox seq(로그 증분 전송 커서)
+
+/** upstream 큐 status('completed'/'failed') 종결 판정. */
+function _isFinished(status) { return status === 'completed' || status === 'failed'; }
+
+/** 가벼운 알림(원격 컨텍스트엔 전용 모달이 없어 window.alert 폴백). */
+function _notify(msg) { try { if (typeof alert === 'function') alert(msg); } catch (e) {} }
 
 /** 현재 유저스크립트 버전(GM_info) — 대시보드 클라 카드에 표시해 미업데이트 프로필을 즉시 식별. */
 function _scriptVersion() {
@@ -295,41 +303,43 @@ async function processExpansions(cfg, expansions) {
     }
 }
 
-function applyCommand(cmd) {
-    switch (cmd.type) {
-        case 'add':
-            if (cmd.payload && cmd.payload.urls) {
-                const text = Array.isArray(cmd.payload.urls)
-                    ? cmd.payload.urls.join('\n')
-                    : String(cmd.payload.urls);
-                addUrls(text);
-            }
-            break;
-        case 'start':
-            // 무인 상태에서 startQueue()가 'pending 없음' tokiAlert 팝업을 띄워 블로킹하는 것 방지:
-            // 실제 대기 항목이 있을 때만 시작(내비게이션/리로드 유발).
-            if (!isRunning() && getQueue().some((i) => i.status === 'pending')) startQueue();
-            break;
-        case 'stop':
-            stopQueue();
-            break;
-        case 'clear':
-            clearQueue();
-            break;
-        case 'remove':
-            if (cmd.payload && cmd.payload.url) {
-                // addUrls와 동일한 pathKey 기준으로 매칭(trailing slash/도메인 미러 차이로 삭제 누락 방지)
-                const key = pathKey(cmd.payload.url);
-                const q = getQueue().filter((i) => pathKey(i.url) !== key);
-                saveQueue(q);
-            }
-            break;
-        default:
-            break;
-    }
+/**
+ * lease unit → upstream 큐 episode 객체로 변환.
+ *   unit.url 에 매칭되는 룰로 파서를 만들어 category/viewer 를 정확히 채운다(부모 페이지 카테고리 무관).
+ *   upstream worker 는 episode.category 로 소설/만화 분기(novel→epub, 그 외→cbz)하므로 정확해야 한다.
+ *   서버 unit.id 는 unitId 커스텀 필드로 보존 → 완료 시 /complete 매핑(큐 item id 와 별개).
+ */
+async function unitToEpisode(u) {
+    if (!u || !u.url) return null;
+    let rule = {};
+    try {
+        const parser = await ParserFactory.getParserForUrl(u.url);
+        rule = (parser && parser.rule) || {};
+    } catch (e) {}
+    const cat = rule.category || 'Webtoon';
+    const isNovel = /novel/i.test(cat);
+    let origin = '';
+    try { origin = new URL(u.url).origin; } catch (e) {}
+    return {
+        episodeNum: u.num || '',
+        url: u.url,
+        title: u.label || '',
+        rootFolder: u.series || '',
+        category: cat,
+        novelFormat: isNovel ? 'epub' : 'cbz',
+        matchedRule: rule,
+        protocolDomain: origin,
+        viewerCfg: rule.viewer || {},
+        destination: 'native',
+        // 멀티-IP 메타(lease 풀 식별/표지/시리즈 메타 + 서버 unit 매핑 키).
+        series: u.series,
+        cover: u.cover,
+        meta: u.meta,
+        unitId: u.id,
+    };
 }
 
-/** 폴링 디스패처 — clientId 설정 시 lease 모드, 아니면 레거시 글로벌 /queue 모드(하위호환). */
+/** 폴링 디스패처 — clientId 설정 시 lease 모드, 아니면 레거시(heartbeat 미러)만. */
 async function poll() {
     const cfg = getRemoteConfig();
     if (!cfg.enabled || !cfg.url) return;
@@ -337,48 +347,19 @@ async function poll() {
     return pollLegacy(cfg);
 }
 
-/** 레거시 단일 클라 모드 — 글로벌 /queue 명령 스트림 폴링 + /progress 미러. */
+/**
+ * 레거시 단일 클라 모드(하위호환) — upstream 큐엔 명령형 addUrls 가 없으므로 명령 적용은 하지 않고
+ *   로컬 큐 상태만 /progress 로 미러 보고한다(대시보드 표시용). 멀티-IP(lease) 가 메인 경로.
+ */
 async function pollLegacy(cfg) {
-    let lastSeq = parseInt(_gv(K_LAST_SEQ, '-1'), 10);
-    if (isNaN(lastSeq)) lastSeq = -1;
-
-    let data;
-    try {
-        data = await gmRequest({
-            method: 'GET',
-            url: `${base(cfg.url)}/queue?since=${lastSeq}`,
-            token: cfg.token,
-        });
-    } catch (e) {
-        // 서버 오프라인/일시 오류 → 다음 주기에 재시도
-        return;
-    }
-
-    if (lastSeq < 0) {
-        // 최초 부착: 현재 seq를 기준선으로 채택, 백로그 미적용
-        const baseSeq = typeof data.seq === 'number' ? data.seq : 0;
-        _sv(K_LAST_SEQ, String(baseSeq));
-    } else if (Array.isArray(data.commands) && data.commands.length) {
-        const cmds = data.commands
-            .filter((c) => c.seq > lastSeq)
-            .sort((a, b) => a.seq - b.seq);
-        for (const c of cmds) {
-            // 내비게이션 안전: 적용 전에 seq 영속화
-            _sv(K_LAST_SEQ, String(c.seq));
-            try { applyCommand(c); } catch {}
-        }
-    }
-
-    // 로컬 상태 미러 보고
     try {
         await gmRequest({
             method: 'POST',
             url: `${base(cfg.url)}/progress`,
             token: cfg.token,
-            data: { queue: getQueue(), running: isRunning(), progress: _lastProgress },
+            data: { queue: getQueue(), running: getQueue().some((i) => i.status === 'processing'), progress: _lastProgress },
         });
     } catch (e) {
-        // 네트워크 오류는 무시(오프라인). 단 인증/서버 오류(4xx/5xx)는 설정 진단을 위해 로그.
         const m = e && e.message ? e.message : '';
         if (/^HTTP [45]/.test(m)) {
             try { console.warn('[TokiSync-Remote] progress 보고 실패:', m); } catch {}
@@ -387,100 +368,120 @@ async function pollLegacy(cfg) {
 }
 
 /**
- * 멀티-IP lease 모드 — 작업 분배(work-stealing).
- *  ① 완료(done/error)된 unit을 /complete로 보고 → 성공 시 로컬 큐에서 제거.
- *  ② pending unit이 부족하면 /lease로 보충해 로컬 큐에 주입(중복 없는 회차 자동 분배).
+ * 멀티-IP lease 모드 — 작업 분배(work-stealing). upstream 큐 API 연동.
+ *  ① 완료(completed/failed)된 unit을 /complete로 보고 → reported 플래그로 1회만 보고.
+ *  ② 보유(pending/processing) unit이 부족하면 /lease로 보충 → addEpisodesToQueue 로 주입
+ *     (이벤트 스케줄러가 큐 변동을 감지해 워커를 자동 기동).
  *  ③ /progress로 clientId·외부IP·진행률·보유 unit heartbeat(서버가 lease TTL 갱신).
+ *  ④ paused 동기화 + 작품 자동 펼침 처리.
  * 페이지 내비게이션을 거쳐도 unitId가 GM 큐에 영속되므로 완료 매핑/재투입이 안전하게 이어진다.
  */
 async function pollLease(cfg) {
-    // ① 완료 보고 — unitId가 붙은 큐 항목 중 done/error 수집
-    const q = getQueue();
-    const finished = q.filter((i) => i.unitId && (i.status === 'done' || i.status === 'error'));
-    if (finished.length) {
-        const results = finished.map((i) => ({ id: i.unitId, ok: i.status === 'done' }));
-        try {
-            await gmRequest({
-                method: 'POST',
-                url: `${base(cfg.url)}/complete`,
-                token: cfg.token,
-                data: { clientId: cfg.clientId, results },
-            });
-            // 보고 성공 → 종결 항목 제거(큐 비대화 방지). 서버는 중복 /complete를 멱등 무시하므로
-            // 제거 전에 네비게이션이 끼어도 다음 폴에서 재보고 후 정리되어 유실 없음.
-            const doneIds = new Set(finished.map((i) => i.unitId));
-            saveQueue(getQueue().filter((i) => !(i.unitId && doneIds.has(i.unitId) && (i.status === 'done' || i.status === 'error'))));
-        } catch (e) {
-            // 실패 시 제거하지 않고 다음 주기 재시도(at-least-once 보고).
+    // ① 완료 보고 — unitId 가 붙은 큐 항목 중 종결(completed/failed) & 미보고분 수집.
+    //    제거 대신 reported 플래그로 중복 보고 방지(서버 /complete 는 멱등이라 at-least-once 안전).
+    {
+        const q = getQueue();
+        const finished = q.filter((i) => i.unitId && _isFinished(i.status) && !i.reported);
+        if (finished.length) {
+            const results = finished.map((i) => ({ id: i.unitId, ok: i.status === 'completed' }));
+            try {
+                await gmRequest({
+                    method: 'POST',
+                    url: `${base(cfg.url)}/complete`,
+                    token: cfg.token,
+                    data: { clientId: cfg.clientId, results },
+                });
+                finished.forEach((i) => updateQueueItem(i.id, { reported: true }));
+            } catch (e) {
+                // 실패 시 reported 미표시 → 다음 주기 재시도(at-least-once 보고).
+            }
         }
     }
 
-    // ② 임대 보충 — pending unit 수가 목표(leaseMax) 미만이면 부족분만큼 요청
-    const pendingUnits = getQueue().filter((i) => i.unitId && i.status === 'pending').length;
-    if (pendingUnits < cfg.leaseMax) {
-        const want = cfg.leaseMax - pendingUnits;
-        try {
-            const res = await gmRequest({
-                method: 'GET',
-                url: `${base(cfg.url)}/lease?clientId=${encodeURIComponent(cfg.clientId)}&max=${want}`,
-                token: cfg.token,
-            });
-            const units = Array.isArray(res.units) ? res.units : [];
-            addLeasedUnits(units); // 큐 주입만 — 실제 처리 가동은 heartbeat 뒤 runLeaseQueue(reload 없음)
-        } catch (e) {
-            const m = e && e.message ? e.message : '';
-            if (/^HTTP [45]/.test(m)) {
-                try { console.warn('[TokiSync-Remote] lease 실패:', m); } catch {}
+    // ② 임대 보충 — 보유(pending/processing) lease unit 수가 목표(leaseMax) 미만이면 부족분만큼 요청.
+    {
+        const q = getQueue();
+        const held = q.filter((i) => i.unitId && (i.status === 'pending' || i.status === 'processing')).length;
+        if (held < cfg.leaseMax) {
+            const want = cfg.leaseMax - held;
+            try {
+                const res = await gmRequest({
+                    method: 'GET',
+                    url: `${base(cfg.url)}/lease?clientId=${encodeURIComponent(cfg.clientId)}&max=${want}`,
+                    token: cfg.token,
+                });
+                const units = Array.isArray(res.units) ? res.units : [];
+                if (units.length) {
+                    const episodes = (await Promise.all(units.map((u) => unitToEpisode(u)))).filter(Boolean);
+                    if (episodes.length) {
+                        // novelTitle(=id 해시 시드)은 회차별 폴더명(rootFolder). 같은 시리즈는 동일 시드.
+                        addEpisodesToQueue(episodes, episodes[0].rootFolder || '');
+                    }
+                }
+            } catch (e) {
+                const m = e && e.message ? e.message : '';
+                if (/^HTTP [45]/.test(m)) {
+                    try { console.warn('[TokiSync-Remote] lease 실패:', m); } catch {}
+                }
             }
         }
     }
 
     // ③ heartbeat — clientId/외부IP/진행률/보유 unit 보고(서버가 해당 클라의 모든 leased unit TTL 갱신).
-    //    내비게이션(startQueue) 전에 반드시 발사 → 임대 직후 페이지 전환으로 lease가 굶지 않게 한다.
-    const cur = getQueue();
-    const current = cur.filter((i) => i.unitId && i.status === 'pending').map((i) => i.unitId);
     let hbRes = null;
-    try {
-        hbRes = await gmRequest({
-            method: 'POST',
-            url: `${base(cfg.url)}/progress`,
-            token: cfg.token,
-            data: {
-                clientId: cfg.clientId,
-                label: cfg.clientId,
-                ip: await ensureExternalIp(),
-                queue: cur,
-                running: isRunning(),
-                progress: _lastProgress,
-                current,
-                logs: _collectLogsSince(), // 새 로그 증분 동봉(대시보드 실시간 로그 패널용)
-                version: _scriptVersion(), // 유저스크립트 버전(대시보드 클라 카드 표시 — 미업데이트 프로필 진단)
-            },
-        });
-    } catch (e) {
-        const m = e && e.message ? e.message : '';
-        if (/^HTTP [45]/.test(m)) {
-            try { console.warn('[TokiSync-Remote] heartbeat 실패:', m); } catch {}
+    {
+        const cur = getQueue();
+        const current = cur.filter((i) => i.unitId && (i.status === 'pending' || i.status === 'processing')).map((i) => i.unitId);
+        const queueSummary = cur.map((i) => ({ id: i.id, status: i.status, episodeNum: i.episodeNum, unitId: i.unitId, progressPercent: i.progressPercent }));
+        try {
+            hbRes = await gmRequest({
+                method: 'POST',
+                url: `${base(cfg.url)}/progress`,
+                token: cfg.token,
+                data: {
+                    clientId: cfg.clientId,
+                    label: cfg.clientId,
+                    ip: await ensureExternalIp(),
+                    queue: queueSummary,
+                    running: current.length > 0,
+                    progress: _lastProgress,
+                    current,
+                    logs: _collectLogsSince(), // 새 로그 증분 동봉(대시보드 실시간 로그 패널용)
+                    version: _scriptVersion(), // 유저스크립트 버전(대시보드 클라 카드 표시 — 미업데이트 프로필 진단)
+                },
+            });
+        } catch (e) {
+            const m = e && e.message ? e.message : '';
+            if (/^HTTP [45]/.test(m)) {
+                try { console.warn('[TokiSync-Remote] heartbeat 실패:', m); } catch {}
+            }
         }
     }
 
-    // ⑤ 정지(paused) — 서버가 정지 상태면 로컬 큐를 멈추고 이번 주기 종료(새 작업/시작 안 함).
-    if (hbRes && hbRes.paused) {
-        try { if (isRunning()) stopQueue(); } catch (e) {}
-        return;
+    // ③-b clear 동기화 — 서버 풀 비우기(/jobs/clear)를 로컬 큐/워커에도 반영.
+    //    서버 clearSeq 가 증가하면(새 clear) 활성 워커 팝업을 닫고(stopAllWorkers) 로컬 큐를 완전히 비운다(clearQueue).
+    //    이게 없으면 서버 풀만 비고 클라 로컬 큐가 남아 워커가 계속 돈다.
+    const _srvClearSeq = (hbRes && Number(hbRes.clearSeq)) || 0;
+    if (_lastClearSeq === null) {
+        _lastClearSeq = _srvClearSeq; // 첫 연결: 기준값만 동기화(기존 clear 재실행 방지 — 방금 투입한 큐 보호)
+    } else if (_srvClearSeq > _lastClearSeq) {
+        _lastClearSeq = _srvClearSeq;
+        try {
+            stopAllWorkers();   // 활성 팝업 닫기 + pending/processing → failed 마킹
+            clearQueue();       // 로컬 큐 완전 비우기(failed 잔존도 제거)
+            LogBox.getInstance().log('🗑️ 서버 풀 비우기 감지 → 로컬 큐/워커 정리', 'warn', 'Remote');
+        } catch (e) {}
     }
 
-    // ④ 작품 자동 펼침 — heartbeat 응답의 expand 요청을 처리(Cloudflare 통과한 이 브라우저가
+    // ④ paused 동기화 — 서버 정지 상태를 upstream 큐 일시정지(setQueuePaused)에 반영.
+    //    스케줄러는 getQueuePaused() 를 보고 새 워커 기동을 보류한다. 정지면 자동 펼침도 생략.
+    setQueuePaused(!!(hbRes && hbRes.paused));
+    if (hbRes && hbRes.paused) return;
+
+    // ⑤ 작품 자동 펼침 — heartbeat 응답의 expand 요청을 처리(Cloudflare 통과한 이 브라우저가
     //    회차 목록을 받아 /jobs 로 투입). 멱등이라 다른 클라가 동시에 처리해도 중복은 흡수된다.
     if (hbRes && Array.isArray(hbRes.expansions) && hbRes.expansions.length) {
         try { await processExpansions(cfg, hbRes.expansions); } catch (e) {}
-    }
-
-    // heartbeat(=lease TTL 갱신)가 끝난 뒤, pending lease 가 있으면 부모 탭에서 직접 처리 루프를 가동한다.
-    //   reload/navigation 없이 runLeaseQueue 호출 — 이미 루프 중이면 재진입 가드(_leaseBusy)로 즉시 무시.
-    //   (paused 면 위 ⑤에서 이미 return 했으므로 여기 도달하지 않는다.)
-    if (getQueue().some((i) => i.unitId && i.status === 'pending')) {
-        runLeaseQueue();
     }
 }
 
@@ -523,6 +524,16 @@ export function startRemoteSync() {
     if (!cfg.enabled || !cfg.url) return;
     _started = true;
 
+    // upstream 이벤트 스케줄러 + 배치 IPC 라우터 1회 init. 중복 init 가드.
+    //   ⚠️ initBatchWorkerController 필수: 워커 READY → START_EXTRACTION 주입 라우터.
+    //   이게 없으면 lease 워커 팝업이 떠도 지시를 못 받아 멈춘다(스크롤/추출 미진행).
+    //   먼저 라우터를 켠 뒤 스케줄러(팝업 기동)를 돌려야 READY 를 놓치지 않는다.
+    if (!_schedulerInited) {
+        _schedulerInited = true;
+        try { initBatchWorkerController(); } catch (e) {}
+        try { initQueueScheduler(); } catch (e) {}
+    }
+
     window.addEventListener('toki:captcha', onCaptcha);
     window.addEventListener('toki:progress', onProgress);
     // 백업: 팝업이 top까지 보낸 캡차 postMessage도 포착
@@ -549,7 +560,7 @@ export function registerRemoteMenu() {
 async function onExpandCurrentSeries() {
     const cfg = getRemoteConfig();
     if (!cfg.enabled || !cfg.url) {
-        tokiAlert('먼저 🌐 원격 제어 설정에서 컨트롤 API 주소/토큰을 설정하고 활성화하세요.');
+        _notify('먼저 🌐 원격 제어 설정에서 컨트롤 API 주소/토큰을 설정하고 활성화하세요.');
         return;
     }
     // 라이브 파서로 회차 목록 추출 — 각 회차의 권위 번호(num)/제목(title)을 함께 가져온다
@@ -571,16 +582,16 @@ async function onExpandCurrentSeries() {
     } catch (e) {}
     if (!items.length) items = extractChapterUrls(document, location.href); // 폴백(문자열 url들)
     if (!items.length) {
-        tokiAlert('이 페이지에서 회차 목록을 찾지 못했습니다.\n작품 메인(회차 목록) 페이지에서 실행하세요.');
+        _notify('이 페이지에서 회차 목록을 찾지 못했습니다.\n작품 메인(회차 목록) 페이지에서 실행하세요.');
         return;
     }
     try {
         // 라이브 파서로 정식 폴더명([id] 작품명) 계산 → 모든 회차가 같은 폴더(외전 포함)로 분류됨.
         const folder = await computeSeriesFolderLive();
         const r = await expandSeriesToJobs(cfg, location.href, folder, items);
-        tokiAlert(`📤 ${r.count}개 회차를 원격 풀에 투입했습니다.\n폴더: ${r.folder || '(자동)'}\n추가 ${r.added} · 중복 ${r.skipped} 제외\n각 클라이언트(프로필)가 나눠서 다운로드합니다.`);
+        _notify(`📤 ${r.count}개 회차를 원격 풀에 투입했습니다.\n폴더: ${r.folder || '(자동)'}\n추가 ${r.added} · 중복 ${r.skipped} 제외\n각 클라이언트(프로필)가 나눠서 다운로드합니다.`);
     } catch (e) {
-        tokiAlert('투입 실패: ' + (e && e.message ? e.message : e));
+        _notify('투입 실패: ' + (e && e.message ? e.message : e));
     }
 }
 
@@ -643,7 +654,6 @@ export function openRemoteModal() {
         _sv(CFG_REMOTE_POLL_SEC, String(parseInt(overlay.querySelector('#dsx-rm-poll').value, 10) || 5));
         _sv(CFG_REMOTE_CLIENT_ID, overlay.querySelector('#dsx-rm-client').value.trim());
         _sv(CFG_REMOTE_LEASE_MAX, String(parseInt(overlay.querySelector('#dsx-rm-leasemax').value, 10) || 2));
-        _sv(K_LAST_SEQ, '-1'); // 설정 변경 시 기준선 재설정
         overlay.remove();
         try { location.reload(); } catch {}
     };

@@ -1,5 +1,3 @@
-import { tokiAlert } from './ui.js';
-
 export const CFG_URL_KEY = "TOKI_GAS_URL"; // legacy
 export const CFG_ID_KEY = "TOKI_GAS_ID";
 export const CFG_FOLDER_ID = "TOKI_FOLDER_ID";
@@ -11,63 +9,21 @@ export const CFG_NOVEL_MODE = "TOKI_NOVEL_MODE";
 export const CFG_NOVEL_FORMAT = "TOKI_NOVEL_FORMAT";
 export const CFG_REMOTE_RULE_URL = "TOKI_REMOTE_RULE_URL";
 export const CFG_CUSTOM_RULES = "TOKI_CUSTOM_RULES";
-export const CFG_GLOBAL_URL_EXCLUDE = "TOKI_GLOBAL_URL_EXCLUDE";
-export const CFG_CBZ_COMPRESSION = "TOKI_CBZ_COMPRESSION"; // "DEFLATE" | "STORE"
-export const CFG_CONCURRENCY = "TOKI_CONCURRENCY";         // 1 = sequential (default), 2+ = parallel chapters
-export const CFG_SCROLL_TIMEOUT_MS = "TOKI_SCROLL_TIMEOUT_MS"; // ms, default 20000
+// [LAN custom] 네이티브 NAS WebDAV 저장 (policy 'native' = WebDAV 업로드)
 export const CFG_WEBDAV_URL = "TOKI_WEBDAV_URL";   // 예: http://192.168.0.50:5005/books
 export const CFG_WEBDAV_USER = "TOKI_WEBDAV_USER";
 export const CFG_WEBDAV_PASS = "TOKI_WEBDAV_PASS";
-export const CFG_IMG_CONCURRENCY = "TOKI_IMG_CONCURRENCY"; // 회차 내 이미지 동시 다운로드 수 (기본 8)
-export const CFG_WAF_JITTER_SEC = "TOKI_WAF_JITTER_SEC";   // 회차 사이 WAF 지터 기준 초 (기본 3 → 3~5초)
-export const CFG_FORCE_OPEN_SHADOW = "TOKI_FORCE_OPEN_SHADOW"; // 닫힌 shadow 강제 open(소설 본문 추출용, 기본 OFF)
-// -- 원격 제어 (컨트롤 API 폴링) --
-export const CFG_REMOTE_ENABLED = "TOKI_REMOTE_ENABLED";   // "1" | "0"
-export const CFG_REMOTE_API_URL = "TOKI_REMOTE_API_URL";   // 예: http://192.168.0.x:8787
+// [LAN custom] 멀티-IP 원격 lease 제어
+export const CFG_REMOTE_ENABLED = "TOKI_REMOTE_ENABLED";     // "1" | "0"
+export const CFG_REMOTE_API_URL = "TOKI_REMOTE_API_URL";     // 예: http://192.168.0.x:8787
 export const CFG_REMOTE_API_TOKEN = "TOKI_REMOTE_API_TOKEN";
-export const CFG_REMOTE_POLL_SEC = "TOKI_REMOTE_POLL_SEC"; // 폴링 주기(초), 기본 5
+export const CFG_REMOTE_POLL_SEC = "TOKI_REMOTE_POLL_SEC";   // 폴링 주기(초), 기본 5
 export const CFG_REMOTE_CLIENT_ID = "TOKI_REMOTE_CLIENT_ID"; // 멀티-IP 식별 라벨(예: A-direct). 설정 시 lease 모드
-export const CFG_REMOTE_LEASE_MAX = "TOKI_REMOTE_LEASE_MAX"; // 동시 보유 lease 목표 수(기본 2)
-
-/**
- * [custom] CBZ 압축 모드 — DEFLATE (기본, 작음/느림) 또는 STORE (큼/빠름)
- */
-export function getCbzCompression() {
-    if (typeof GM_getValue === 'undefined') return 'DEFLATE';
-    const v = (GM_getValue(CFG_CBZ_COMPRESSION, 'DEFLATE') || '').toUpperCase();
-    return v === 'STORE' ? 'STORE' : 'DEFLATE';
-}
-
-/**
- * [custom] 회차 동시 처리 수 — 1=순차(기본). 2 이상이면 병렬.
- */
-export function getConcurrency() {
-    if (typeof GM_getValue === 'undefined') return 1;
-    const v = parseInt(GM_getValue(CFG_CONCURRENCY, '1'), 10);
-    if (!Number.isFinite(v) || v < 1) return 1;
-    return Math.min(v, 8); // 최대 8 — 사이트 부하 보호
-}
-
-/**
- * [custom] 스크롤 대기 timeout (ms) — viewerCfg.scrollStallTimeoutMs 가 우선
- */
-export function getScrollTimeoutMs() {
-    if (typeof GM_getValue === 'undefined') return 20000;
-    const v = parseInt(GM_getValue(CFG_SCROLL_TIMEOUT_MS, '20000'), 10);
-    if (!Number.isFinite(v) || v < 1000) return 20000;
-    return v;
-}
-
-/**
- * [custom] 전역 URL 차단 패턴 — 모든 룰에 적용
- * 쉼표 또는 줄바꿈으로 구분된 substring/regex 패턴
- */
-export function getGlobalUrlExcludeList() {
-    if (typeof GM_getValue === 'undefined') return [];
-    const raw = GM_getValue(CFG_GLOBAL_URL_EXCLUDE, "");
-    if (!raw || !raw.trim()) return [];
-    return raw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
-}
+export const CFG_REMOTE_LEASE_MAX = "TOKI_REMOTE_LEASE_MAX"; // 동시 보유 lease 목표 수(기본 2, MAX_CONCURRENCY=2 이상 권장)
+// [upstream develop v1.21.5] 스캔 속도 + 로컬 명명 템플릿
+export const CFG_SCAN_SPEED = "TOKI_SCAN_SPEED";
+export const CFG_LOCAL_NAME_TEMPLATE = "TOKI_LOCAL_NAME_TEMPLATE";
+export const CFG_LOCAL_EPISODE_PADDING = "TOKI_LOCAL_EPISODE_PADDING";
 
 /**
  * Get current configuration
@@ -110,20 +66,18 @@ export function getConfig() {
         novelFormat: GM_getValue(CFG_NOVEL_FORMAT, "epub"), // default: EPUB
         remoteRuleUrl: remoteRuleUrl,
         customRules: GM_getValue(CFG_CUSTOM_RULES, "[]"),
+        // NAS WebDAV (policy 'native')
         webdavUrl: GM_getValue(CFG_WEBDAV_URL, ""),
         webdavUser: GM_getValue(CFG_WEBDAV_USER, ""),
         webdavPass: GM_getValue(CFG_WEBDAV_PASS, ""),
-        concurrency: parseInt(GM_getValue(CFG_CONCURRENCY, "1"), 10) || 1,
-        imgConcurrency: Math.min(16, Math.max(1, parseInt(GM_getValue(CFG_IMG_CONCURRENCY, "8"), 10) || 8)),
-        wafJitterSec: Math.min(10, Math.max(0, parseFloat(GM_getValue(CFG_WAF_JITTER_SEC, "3")) || 3)),
-        forceOpenShadow: GM_getValue(CFG_FORCE_OPEN_SHADOW, false) === true || GM_getValue(CFG_FORCE_OPEN_SHADOW, false) === '1'
+        // [upstream develop] 스캔 속도 + 로컬 명명 템플릿
+        scanSpeed: parseFloat(GM_getValue(CFG_SCAN_SPEED, "1.0")),
+        localNameTemplate: GM_getValue(CFG_LOCAL_NAME_TEMPLATE, "{number} - {title}"),
+        localEpisodePadding: GM_getValue(CFG_LOCAL_EPISODE_PADDING, "4")
     };
 }
 
-/**
- * 원격 제어 설정 조회
- * @returns {{enabled: boolean, url: string, token: string, pollSec: number}}
- */
+/** 멀티-IP 원격 lease 제어 설정. clientId 설정 시 lease 모드. */
 export function getRemoteConfig() {
     const gv = (k, d) => {
         try { return typeof GM_getValue !== 'undefined' ? GM_getValue(k, d) : d; }
@@ -134,15 +88,15 @@ export function getRemoteConfig() {
         url: gv(CFG_REMOTE_API_URL, ''),
         token: gv(CFG_REMOTE_API_TOKEN, ''),
         pollSec: Math.max(2, parseInt(gv(CFG_REMOTE_POLL_SEC, '5'), 10) || 5),
-        clientId: (gv(CFG_REMOTE_CLIENT_ID, '') || '').trim(), // 설정 시 lease 모드, 빈값이면 레거시 /queue 모드
+        clientId: (gv(CFG_REMOTE_CLIENT_ID, '') || '').trim(),
         leaseMax: Math.max(1, Math.min(20, parseInt(gv(CFG_REMOTE_LEASE_MAX, '2'), 10) || 2)),
     };
 }
 
 /**
  * Set configuration value
- * @param {string} key
- * @param {string} value
+ * @param {string} key 
+ * @param {string} value 
  */
 export function setConfig(key, value) {
     GM_setValue(key, value);
@@ -151,94 +105,94 @@ export function setConfig(key, value) {
 /**
  * Show Configuration Modal
  */
-export function showConfigModal() {
+export function showConfigModal(popupDoc = document) {
+    const doc = popupDoc;
     // Remove existing modal if any
-    const existing = document.getElementById('dsx-config-modal');
+    const existing = doc.getElementById('toki-config-modal');
     if (existing) existing.remove();
 
     const config = getConfig();
 
     // -- HTML Structure (v1.9.1 Glassmorphism) --
-    const overlay = document.createElement('div');
-    overlay.id = 'dsx-config-modal';
-    overlay.className = 'dsx-modal-overlay';
+    const overlay = doc.createElement('div');
+    overlay.id = 'toki-config-modal';
+    overlay.className = 'toki-modal-overlay';
     
 
     overlay.innerHTML = `
-        <div class="dsx-modal dsx-modal-main">
-            <div class="dsx-modal-header dsx-modal-header-borderless">
-                <div class="dsx-modal-title dsx-text-lg">🛠️ 상세 설정 (Advanced)</div>
+        <div class="toki-modal toki-modal-main">
+            <div class="toki-modal-header toki-modal-header-borderless">
+                <div class="toki-modal-title toki-text-lg">🛠️ 상세 설정 (Advanced)</div>
             </div>
             
-            <div class="dsx-section-title dsx-mt-0">Cloud & Storage</div>
-            <div class="dsx-control-group">
-                <label class="dsx-label">GAS Script ID</label>
-                <input type="text" id="dsx-cfg-gas-id" class="dsx-input" placeholder="AKfycb..." value="${config.gasId}">
+            <div class="toki-section-title toki-mt-0">Cloud & Storage</div>
+            <div class="toki-control-group">
+                <label class="toki-label">GAS Script ID</label>
+                <input type="text" id="toki-cfg-gas-id" class="toki-input" placeholder="AKfycb..." value="${config.gasId}">
             </div>
 
-            <div class="dsx-control-group">
-                <label class="dsx-label">Google Drive Folder ID</label>
-                <input type="text" id="dsx-cfg-folder" class="dsx-input" placeholder="Folder ID" value="${config.folderId}">
+            <div class="toki-control-group">
+                <label class="toki-label">Google Drive Folder ID</label>
+                <input type="text" id="toki-cfg-folder" class="toki-input" placeholder="Folder ID" value="${config.folderId}">
             </div>
 
-            <div class="dsx-control-group">
-                <label class="dsx-label">API Key (보안)</label>
-                <input type="password" id="dsx-cfg-apikey" class="dsx-input" placeholder="API Key" value="${config.apiKey}">
+            <div class="toki-control-group">
+                <label class="toki-label">API Key (보안)</label>
+                <input type="password" id="toki-cfg-apikey" class="toki-input" placeholder="API Key" value="${config.apiKey}">
             </div>
 
-            <div class="dsx-section-title">NAS WebDAV (자동 분류 정책)</div>
-            <div class="dsx-control-group">
-                <label class="dsx-label">WebDAV URL</label>
-                <input type="text" id="dsx-cfg-webdav-url" class="dsx-input" placeholder="http://192.168.0.50:5005/books" value="${config.webdavUrl}">
-            </div>
-            <div class="dsx-form-grid">
-                <div class="dsx-control-group">
-                    <label class="dsx-label">WebDAV 계정</label>
-                    <input type="text" id="dsx-cfg-webdav-user" class="dsx-input" placeholder="user" value="${config.webdavUser}">
-                </div>
-                <div class="dsx-control-group">
-                    <label class="dsx-label">WebDAV 비밀번호</label>
-                    <input type="password" id="dsx-cfg-webdav-pass" class="dsx-input" placeholder="password" value="${config.webdavPass}">
-                </div>
-            </div>
-            <div class="dsx-control-group">
-                <label class="dsx-label">동시 업로드 수 (1~8, 다운로드는 항상 순차)</label>
-                <input type="number" id="dsx-cfg-concurrency" class="dsx-input" min="1" max="8" step="1" placeholder="1" value="${config.concurrency}">
-            </div>
-
-            <div class="dsx-section-title">다운로드 속도 (밴 위험 주의)</div>
-            <div class="dsx-form-grid">
-                <div class="dsx-control-group">
-                    <label class="dsx-label">이미지 동시 다운로드 (1~16, 기본 8)</label>
-                    <input type="number" id="dsx-cfg-img-concurrency" class="dsx-input" min="1" max="16" step="1" placeholder="8" value="${config.imgConcurrency}">
-                </div>
-                <div class="dsx-control-group">
-                    <label class="dsx-label">WAF 지터 기준초 (기본 3 → 3~5초, 낮출수록 빠르지만 밴↑)</label>
-                    <input type="number" id="dsx-cfg-waf-jitter" class="dsx-input" min="0" max="10" step="0.5" placeholder="3" value="${config.wafJitterSec}">
-                </div>
-            </div>
-            <div class="dsx-control-group">
-                <label class="dsx-label" style="display:flex;align-items:center;gap:8px;">
-                    <input type="checkbox" id="dsx-cfg-force-shadow" ${config.forceOpenShadow ? 'checked' : ''}>
-                    닫힌 Shadow DOM 강제 열기 (모든 사이트 강제 ON)
-                </label>
-                <small style="opacity:.6">소설(/novel/) 페이지는 자동으로 켜지므로 보통 끈 채로 두세요. URL이 /novel/이 아닌 소설 사이트에서만 수동으로 켜세요. (만화에서 강제 ON 시 차단 위험)</small>
-            </div>
-
-            <div class="dsx-section-title">Global Policies</div>
-            <div class="dsx-control-group">
-                <label class="dsx-label">다운로드 정책</label>
-                <select id="dsx-cfg-policy" class="dsx-select">
+            <div class="toki-section-title">Global Policies</div>
+            <div class="toki-control-group">
+                <label class="toki-label">다운로드 정책</label>
+                <select id="toki-cfg-policy" class="toki-select">
                     <option value="individual">개별 파일 (Individual)</option>
                     <option value="zipOfCbzs">챕터 묶음 (ZIP of CBZs)</option>
-                    <option value="native">자동 분류 (NAS WebDAV)</option>
+                    <option value="native">자동 분류 (Native = NAS WebDAV)</option>
                     <option value="drive">드라이브 업로드 (GoogleDrive)</option>
                 </select>
             </div>
 
-            <div class="dsx-control-group">
-                <label class="dsx-label">다운로드 속도</label>
-                <select id="dsx-cfg-sleepmode" class="dsx-select">
+            <div class="toki-section-title">NAS WebDAV (자동 분류 정책)</div>
+            <div class="toki-control-group">
+                <label class="toki-label">WebDAV URL</label>
+                <input type="text" id="toki-cfg-webdav-url" class="toki-input" placeholder="http://192.168.0.50:5005/books" value="${config.webdavUrl}">
+            </div>
+            <div class="toki-control-group">
+                <label class="toki-label">WebDAV 계정 (선택)</label>
+                <input type="text" id="toki-cfg-webdav-user" class="toki-input" placeholder="user" value="${config.webdavUser}">
+            </div>
+            <div class="toki-control-group">
+                <label class="toki-label">WebDAV 비밀번호 (선택)</label>
+                <input type="password" id="toki-cfg-webdav-pass" class="toki-input" placeholder="••••" value="${config.webdavPass}">
+            </div>
+
+            <div class="toki-control-group">
+                <label class="toki-label">로컬 파일명 템플릿</label>
+                <input type="text" id="toki-cfg-nametemplate" class="toki-input" 
+                       placeholder="{number} - {title}" value="${config.localNameTemplate}">
+                <div class="toki-hint" style="font-size: 11px; color: #888; margin-top: 4px;">
+                    로컬 저장 시 파일명 포맷입니다. 
+                    (치환자: <b>{number}</b>=패딩번호, <b>{rawNumber}</b>=원본번호, <b>{series}</b>=작품명, <b>{title}</b>=회차제목)<br>
+                    ※ 구글 드라이브 업로드 시에는 호환성을 위해 템플릿이 적용되지 않고 기존 포맷으로 고정됩니다.
+                </div>
+            </div>
+
+            <div class="toki-control-group">
+                <label class="toki-label">로컬 화수 패딩 자릿수</label>
+                <select id="toki-cfg-localpadding" class="toki-select">
+                    <option value="0">패딩 없음 (1, 2, 10)</option>
+                    <option value="2">2자리 패딩 (01, 02, 10)</option>
+                    <option value="3">3자리 패딩 (001, 002, 010)</option>
+                    <option value="4">4자리 패딩 (0001, 0002, 0010)</option>
+                </select>
+                <div class="toki-hint" style="font-size: 11px; color: #888; margin-top: 4px;">
+                    템플릿 내 <b>{number}</b> 치환자에 적용될 패딩 자릿수입니다.
+                </div>
+            </div>
+
+            <div class="toki-control-group">
+                <label class="toki-label">다운로드 속도</label>
+                <select id="toki-cfg-sleepmode" class="toki-select">
                     <option value="agile">빠름 (1-3초)</option>
                     <option value="cautious">신중 (2-5초)</option>
                     <option value="thorough">철저 (3-8초)</option>
@@ -247,9 +201,21 @@ export function showConfigModal() {
                 </select>
             </div>
 
-            <div class="dsx-control-group">
-                <label class="dsx-label">Smart Skip 민감도</label>
-                <select id="dsx-cfg-smartskip" class="dsx-select">
+            <div class="toki-control-group">
+                <label class="toki-label">이미지 스캔 속도 배율
+                    <span id="toki-scan-speed-val">${config.scanSpeed.toFixed(1)}×</span>
+                </label>
+                <input type="range" id="toki-cfg-scanspeed" 
+                       min="0.5" max="5.0" step="0.5" value="${config.scanSpeed}"
+                       class="toki-range" style="width: 100%;">
+                <div class="toki-hint" style="font-size: 11px; color: #888; margin-top: 4px;">
+                    0.5×(빠름/불안정) ─ 1.0×(기본) ─ 3.0×(안정) ─ 5.0×(확실)
+                </div>
+            </div>
+
+            <div class="toki-control-group">
+                <label class="toki-label">Smart Skip 민감도</label>
+                <select id="toki-cfg-smartskip" class="toki-select">
                     <option value="90">90% (매우 민감)</option>
                     <option value="80">80% (민감)</option>
                     <option value="70">70% (보통)</option>
@@ -257,85 +223,89 @@ export function showConfigModal() {
                 </select>
             </div>
             
-            <div class="dsx-section-title">Format & Rules</div>
-            <div class="dsx-form-grid">
-                <div class="dsx-control-group">
-                    <label class="dsx-label">소설 포맷</label>
-                    <select id="dsx-cfg-novel-format" class="dsx-select">
+            <div class="toki-section-title">Format & Rules</div>
+            <div class="toki-form-grid">
+                <div class="toki-control-group">
+                    <label class="toki-label">소설 포맷</label>
+                    <select id="toki-cfg-novel-format" class="toki-select">
                         <option value="epub">EPUB</option>
                         <option value="txt">TXT</option>
                     </select>
                 </div>
-                <div class="dsx-control-group">
-                    <label class="dsx-label">소설 패키징</label>
-                    <select id="dsx-cfg-novel-mode" class="dsx-select">
+                <div class="toki-control-group">
+                    <label class="toki-label">소설 패키징</label>
+                    <select id="toki-cfg-novel-mode" class="toki-select">
                         <option value="perChapter">개별 회차</option>
                         <option value="singleVolume">범위 합본</option>
                     </select>
                 </div>
             </div>
 
-            <div class="dsx-control-group">
-                <label class="dsx-label">원격 파싱 룰 URL (JSON)</label>
-                <input type="text" id="dsx-cfg-remote-rule" class="dsx-input" placeholder="https://example.com/rules.json" value="${config.remoteRuleUrl}">
+            <div class="toki-control-group">
+                <label class="toki-label">원격 파싱 룰 URL (JSON)</label>
+                <input type="text" id="toki-cfg-remote-rule" class="toki-input" placeholder="https://example.com/rules.json" value="${config.remoteRuleUrl}">
             </div>
 
-            <div class="dsx-control-group">
-                <label class="dsx-label">커스텀 파싱 룰 (JSON Array)</label>
-                <textarea id="dsx-cfg-custom-rule" class="dsx-textarea dsx-textarea-code" placeholder="[{...}]">${config.customRules}</textarea>
+            <div class="toki-control-group">
+                <label class="toki-label">커스텀 파싱 룰 (JSON Array)</label>
+                <textarea id="toki-cfg-custom-rule" class="toki-textarea toki-textarea-code" placeholder="[{...}]">${config.customRules}</textarea>
             </div>
 
-            <div class="dsx-modal-footer dsx-btn-group-row dsx-mt-32">
-                <button id="dsx-btn-cancel" class="dsx-btn-action dsx-btn-secondary">취소</button>
-                <button id="dsx-btn-save" class="dsx-btn-action">설정 저장하기</button>
+            <div class="toki-modal-footer toki-btn-group-row toki-mt-32">
+                <button id="toki-btn-cancel" class="toki-btn-action toki-btn-secondary">취소</button>
+                <button id="toki-btn-save" class="toki-btn-action">설정 저장하기</button>
             </div>
         </div>
     `;
 
-    document.body.appendChild(overlay);
+    doc.body.appendChild(overlay);
 
     // -- Logic --
-    const policySelect = document.getElementById('dsx-cfg-policy');
+    const policySelect = doc.getElementById('toki-cfg-policy');
     if(policySelect) policySelect.value = config.policy;
+
+    const localPaddingSelect = doc.getElementById('toki-cfg-localpadding');
+    if(localPaddingSelect) localPaddingSelect.value = config.localEpisodePadding;
     
-    const sleepModeSelect = document.getElementById('dsx-cfg-sleepmode');
+    const sleepModeSelect = doc.getElementById('toki-cfg-sleepmode');
     if(sleepModeSelect) sleepModeSelect.value = config.sleepMode;
 
-    const smartSkipSelect = document.getElementById('dsx-cfg-smartskip');
+    const scanSpeedSlider = doc.getElementById('toki-cfg-scanspeed');
+    if (scanSpeedSlider) {
+        scanSpeedSlider.oninput = (e) => {
+            const valSpan = doc.getElementById('toki-scan-speed-val');
+            if (valSpan) valSpan.innerText = `${parseFloat(e.target.value).toFixed(1)}×`;
+        };
+    }
+
+    const smartSkipSelect = doc.getElementById('toki-cfg-smartskip');
     if(smartSkipSelect) smartSkipSelect.value = config.smartSkipRatio;
 
-    const novelModeSelect = document.getElementById('dsx-cfg-novel-mode');
+    const novelModeSelect = doc.getElementById('toki-cfg-novel-mode');
     if(novelModeSelect) novelModeSelect.value = config.novelMode;
 
-    const novelFormatSelect = document.getElementById('dsx-cfg-novel-format');
+    const novelFormatSelect = doc.getElementById('toki-cfg-novel-format');
     if(novelFormatSelect) novelFormatSelect.value = config.novelFormat;
 
-    document.getElementById('dsx-btn-cancel').onclick = () => overlay.remove();
+    doc.getElementById('toki-btn-cancel').onclick = () => overlay.remove();
     
-    document.getElementById('dsx-btn-save').onclick = () => {
-        const newGasId = document.getElementById('dsx-cfg-gas-id').value.trim();
-        const newFolder = document.getElementById('dsx-cfg-folder').value.trim();
-        const newApiKey = document.getElementById('dsx-cfg-apikey').value.trim();
-        const newPolicy = document.getElementById('dsx-cfg-policy').value;
-        const newSleepMode = document.getElementById('dsx-cfg-sleepmode').value;
-        const newSmartSkip = document.getElementById('dsx-cfg-smartskip').value;
-        const newNovelMode = document.getElementById('dsx-cfg-novel-mode').value;
-        const newNovelFormat = document.getElementById('dsx-cfg-novel-format').value;
-        const newRemoteRule = document.getElementById('dsx-cfg-remote-rule').value.trim();
-        const newCustomRule = document.getElementById('dsx-cfg-custom-rule').value.trim() || '[]';
-        const newWebdavUrl = document.getElementById('dsx-cfg-webdav-url').value.trim();
-        const newWebdavUser = document.getElementById('dsx-cfg-webdav-user').value.trim();
-        const newWebdavPass = document.getElementById('dsx-cfg-webdav-pass').value;
-        let newConcurrency = parseInt(document.getElementById('dsx-cfg-concurrency').value, 10);
-        if (!Number.isFinite(newConcurrency) || newConcurrency < 1) newConcurrency = 1;
-        if (newConcurrency > 8) newConcurrency = 8;
-        let newImgConc = parseInt(document.getElementById('dsx-cfg-img-concurrency').value, 10);
-        if (!Number.isFinite(newImgConc) || newImgConc < 1) newImgConc = 8;
-        if (newImgConc > 16) newImgConc = 16;
-        let newWafJitter = parseFloat(document.getElementById('dsx-cfg-waf-jitter').value);
-        if (!Number.isFinite(newWafJitter) || newWafJitter < 0) newWafJitter = 3;
-        if (newWafJitter > 10) newWafJitter = 10;
-        const newForceShadow = !!document.getElementById('dsx-cfg-force-shadow')?.checked;
+    doc.getElementById('toki-btn-save').onclick = () => {
+        const newGasId = doc.getElementById('toki-cfg-gas-id').value.trim();
+        const newFolder = doc.getElementById('toki-cfg-folder').value.trim();
+        const newApiKey = doc.getElementById('toki-cfg-apikey').value.trim();
+        const newPolicy = doc.getElementById('toki-cfg-policy').value;
+        const newSleepMode = doc.getElementById('toki-cfg-sleepmode').value;
+        const newScanSpeed = doc.getElementById('toki-cfg-scanspeed').value;
+        const newNameTemplate = doc.getElementById('toki-cfg-nametemplate').value.trim() || "{number} - {title}";
+        const newLocalPadding = doc.getElementById('toki-cfg-localpadding').value;
+        const newSmartSkip = doc.getElementById('toki-cfg-smartskip').value;
+        const newNovelMode = doc.getElementById('toki-cfg-novel-mode').value;
+        const newNovelFormat = doc.getElementById('toki-cfg-novel-format').value;
+        const newRemoteRule = doc.getElementById('toki-cfg-remote-rule').value.trim();
+        const newCustomRule = doc.getElementById('toki-cfg-custom-rule').value.trim() || '[]';
+        const newWebdavUrl = (doc.getElementById('toki-cfg-webdav-url') || {}).value || '';
+        const newWebdavUser = (doc.getElementById('toki-cfg-webdav-user') || {}).value || '';
+        const newWebdavPass = (doc.getElementById('toki-cfg-webdav-pass') || {}).value || '';
 
         // Validate Custom Rules JSON
         let validCustomRule = '[]';
@@ -356,7 +326,7 @@ export function showConfigModal() {
             }
             validCustomRule = JSON.stringify(parsed, null, 2);
         } catch (e) {
-            tokiAlert(`커스텀 룰 JSON 파싱 오류:\n${e.message}\n설정을 저장할 수 없습니다.`);
+            alert(`커스텀 룰 JSON 파싱 오류:\n${e.message}\n설정을 저장할 수 없습니다.`);
             return;
         }
 
@@ -370,20 +340,19 @@ export function showConfigModal() {
         setConfig(CFG_API_KEY, newApiKey);
         setConfig(CFG_POLICY_KEY, newPolicy);
         setConfig(CFG_SLEEP_MODE, newSleepMode);
+        setConfig(CFG_SCAN_SPEED, newScanSpeed);
+        setConfig(CFG_LOCAL_NAME_TEMPLATE, newNameTemplate);
+        setConfig(CFG_LOCAL_EPISODE_PADDING, newLocalPadding);
         setConfig(CFG_SMART_SKIP_RATIO, newSmartSkip);
+        setConfig(CFG_WEBDAV_URL, newWebdavUrl.trim());
+        setConfig(CFG_WEBDAV_USER, newWebdavUser.trim());
+        setConfig(CFG_WEBDAV_PASS, newWebdavPass);
         setConfig(CFG_NOVEL_MODE, newNovelMode);
         setConfig(CFG_NOVEL_FORMAT, newNovelFormat);
         setConfig(CFG_REMOTE_RULE_URL, newRemoteRule);
         setConfig(CFG_CUSTOM_RULES, validCustomRule);
-        setConfig(CFG_WEBDAV_URL, newWebdavUrl);
-        setConfig(CFG_WEBDAV_USER, newWebdavUser);
-        setConfig(CFG_WEBDAV_PASS, newWebdavPass);
-        setConfig(CFG_CONCURRENCY, String(newConcurrency));
-        setConfig(CFG_IMG_CONCURRENCY, String(newImgConc));
-        setConfig(CFG_WAF_JITTER_SEC, String(newWafJitter));
-        setConfig(CFG_FORCE_OPEN_SHADOW, newForceShadow); // boolean — index.js 워커가 truthy 체크
 
-        tokiAlert('설정이 저장되었습니다.');
+        alert('설정이 저장되었습니다.');
         overlay.remove();
     };
 

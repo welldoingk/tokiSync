@@ -1,354 +1,578 @@
 /**
- * 다중 시리즈 자동 큐 (cross-page, GM 영속화)
- *
- * 동작: 시리즈 URL들을 큐에 넣고 "시작" → 스크립트가 각 시리즈 페이지로 자동 이동하며
- * 전체 다운로드 → 완료되면 다음 시리즈로. 새로고침/페이지 전환을 거쳐도 GM 저장소로 이어받음.
- *
- * - 큐 상태: GM "TOKI_QUEUE" = [{url, title, status:'pending'|'done'|'error', error?}]
- * - 실행 플래그: GM "TOKI_QUEUE_RUNNING" = "1" | "0"
- * - 다운로드는 호출측이 주입(tokiDownload) — 현재 저장된 정책(native/drive 등) 사용
+ * tokiSync v1.21.0 - Persistent Multi-Queue Batch Core
+ * 영속성 디스크 큐 및 이벤트 기반 세마포어 스케줄러 엔진
  */
 
-import { LogBox, Notifier, tokiAlert } from './ui.js';
+import { LogBox } from './ui.js';
 
-const K_QUEUE = 'TOKI_QUEUE';
-const K_RUNNING = 'TOKI_QUEUE_RUNNING';
+export const WORKER_STAGE = {
+  INIT: 'STAGE_INIT',             // 초기화 및 Handshake 대기 중
+  DOM_READY: 'STAGE_DOM_READY',   // 콘텐츠 DOM 렌더링 및 안정화 대기 중
+  SCROLLING: 'STAGE_SCROLLING',   // 지연 로딩 극복을 위한 강제 스크롤 중
+  PARSING: 'STAGE_PARSING',       // 미디어 분석 및 복호화 처리 중
+  DOWNLOADING: 'STAGE_DOWNLOADING',// XHR 이미지 다운로드 중
+  UPLOADING: 'STAGE_UPLOADING',   // 구글 드라이브 Resumable 업로드 중
+  COMPLETED: 'STAGE_COMPLETED',   // 전체 태스크 성공 완료
+  FAILED: 'STAGE_FAILED'          // 예외 및 수집 실패
+};
 
-let _ranThisLoad = false; // 한 페이지 로드에서 큐 처리 1회 보장
-let _leaseDownloadFn = null; // lease 다운로드 콜백 보관(remote 폴링이 reload 없이 재호출하기 위함)
-let _leaseBusy = false;      // runLeaseQueue 재진입 방지(중복 폴링 호출 흡수)
-const _sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const STORAGE_KEY = 'tokisync_download_queue';
+const MAX_CONCURRENCY = 2; // 최대 동시 다운로드 수
+const LEASE_MAX_CONCURRENCY = 1; // 멀티-IP lease 모드는 보유 수와 실행 수를 분리해 클라당 1개씩 처리
 
-/** 원격 대시보드용 진행률 이벤트 방출(remote.js가 수신) */
-function _emitProgress(detail) {
-    try { window.dispatchEvent(new CustomEvent('toki:progress', { detail })); } catch {}
-}
+// 임시 팝업 창 참조 보관용 맵 (Liveness check 및 재활용 루프 대비)
+export const activeWorkers = new Map();
+const closedCounts = new Map(); // Track closed counts for liveness check independently to avoid polluting activeWorkers window references
 
-function _get(key, def) {
-    try { return typeof GM_getValue !== 'undefined' ? GM_getValue(key, def) : def; }
-    catch { return def; }
-}
-function _set(key, val) {
-    try { if (typeof GM_setValue !== 'undefined') GM_setValue(key, val); } catch {}
-}
-
-export function getQueue() {
-    try { return JSON.parse(_get(K_QUEUE, '[]')) || []; } catch { return []; }
-}
-export function saveQueue(arr) {
-    _set(K_QUEUE, JSON.stringify(Array.isArray(arr) ? arr : []));
-}
-export function isRunning() { return _get(K_RUNNING, '0') === '1'; }
-export function setRunning(b) { _set(K_RUNNING, b ? '1' : '0'); }
-
-/** 비교용 URL 정규화 — pathname만 사용(도메인 미러 변동에 강건) */
-export function pathKey(u) {
-    try { return new URL(u, location.href).pathname.replace(/\/+$/, ''); }
-    catch { return (u || '').trim().replace(/[?#].*$/, '').replace(/\/+$/, ''); }
-}
-
-/** 줄/공백 구분 URL 문자열 → 큐 항목 추가(중복 제거) */
-export function addUrls(text) {
-    const urls = (text || '')
-        .split(/[\s\n]+/).map(s => s.trim())
-        .filter(s => /^https?:\/\//i.test(s));
-    if (urls.length === 0) return 0;
-    const q = getQueue();
-    const existing = new Set(q.map(i => pathKey(i.url)));
-    let added = 0;
-    for (const url of urls) {
-        const k = pathKey(url);
-        if (existing.has(k)) continue;
-        existing.add(k);
-        q.push({ url, title: '', status: 'pending' });
-        added++;
+// Tampermonkey 환경 및 Node.js/일반 브라우저 환경 간의 영속성 호환 래퍼
+const getRawQueue = () => {
+  try {
+    if (typeof GM_getValue !== 'undefined') {
+      return GM_getValue(STORAGE_KEY, []);
     }
-    saveQueue(q);
-    return added;
-}
-
-/**
- * 원격 lease로 임대받은 unit들을 로컬 큐에 주입(unitId 부착, pathKey 기준 중복 제거).
- * unitId가 있으면 remote.js가 완료 시 서버에 `/complete`로 매핑 보고한다.
- * @param {Array<{id:string,url:string,label?:string}>} units
- * @returns {number} 실제 추가된 수
- */
-export function addLeasedUnits(units) {
-    if (!Array.isArray(units) || units.length === 0) return 0;
-    const q = getQueue();
-    // unitId는 서버 권위 키 → 같은 unit 재주입 방지. pathKey 중복은 "아직 처리 안 끝난"(pending)
-    // 항목에 대해서만 차단한다(done/error 잔존 항목과 충돌해 재임대분을 영영 떨구는 lease-leak 방지).
-    const seenIds = new Set(q.filter(i => i.unitId).map(i => i.unitId));
-    const activeKeys = new Set(q.filter(i => i.status === 'pending').map(i => pathKey(i.url)));
-    let added = 0;
-    for (const u of units) {
-        if (!u || !u.url || !/^https?:\/\//i.test(u.url)) continue;
-        if (u.id && seenIds.has(u.id)) continue;          // 동일 unit 이미 보유
-        const k = pathKey(u.url);
-        if (activeKeys.has(k)) continue;                  // 미완 항목과 URL 충돌 → 중복 다운로드 방지
-        seenIds.add(u.id);
-        activeKeys.add(k);
-        // series=폴더명, num/title=권위 회차번호/제목, cover=표지 URL, meta=시리즈 메타(작가/소개/상태/태그). 다운로드 시 사용.
-        q.push({ url: u.url, title: u.label || '', status: 'pending', unitId: u.id, series: u.series || '', num: u.num || '', cover: u.cover || '', meta: u.meta || null });
-        added++;
+    if (typeof localStorage !== 'undefined') {
+      const val = localStorage.getItem(STORAGE_KEY);
+      return val ? JSON.parse(val) : [];
     }
-    if (added) saveQueue(q);
-    return added;
-}
+  } catch (e) {
+    console.error('[TokiSync Queue] Failed to read queue from storage:', e);
+  }
+  return [];
+};
 
-export function clearQueue() { saveQueue([]); setRunning(false); }
-
-/** 큐 시작 — 첫 대기 항목으로 이동(현재 페이지가 그 항목이면 자동 처리에 위임).
- *   ⚠️ lease unit(회차, unitId 있음)은 부모 탭을 회차로 이동시키지 않는다 → maybeRunQueue 의 in-place 경로에 위임.
- *   단일/벌크(시리즈 URL) 모드만 기존 navigation 동작 유지. */
-export function startQueue() {
-    const q = getQueue();
-    const pending = q.filter(i => i.status === 'pending');
-    if (pending.length === 0) { tokiAlert('큐에 대기 중인 항목이 없습니다.'); return; }
-    setRunning(true);
-    const first = pending[0];
-    // lease 모드: 부모 navigation/새로고침 금지. 현재 페이지에 고정한 채 runLeaseQueue 처리 루프를 직접 가동.
-    //   downloadFn 이 등록돼 있으면(거의 항상 — main()의 maybeRunQueue가 먼저 등록) reload 없이 즉시 처리.
-    //   미등록(스크립트 초기화 직후 등 예외)일 때만 reload 로 main 재진입(이후엔 등록되어 reload 불필요).
-    if (first.unitId) {
-        if (_leaseDownloadFn) runLeaseQueue();
-        else location.reload();
-        return;
+const saveRawQueue = (queue) => {
+  try {
+    if (typeof GM_setValue !== 'undefined') {
+      GM_setValue(STORAGE_KEY, queue);
+    } else if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(queue));
     }
-    if (pathKey(first.url) === pathKey(location.href)) {
-        // 이미 첫 항목 페이지 → 새로고침으로 자동 처리 진입
-        location.reload();
-    } else {
-        location.href = first.url;
-    }
-}
-
-export function stopQueue() {
-    setRunning(false);
-    LogBox.getInstance().log('⏸️ 큐 정지됨', 'Queue');
-}
-
-/**
- * 매 페이지 로드 시 호출(top window 한정). 큐가 실행 중이면:
- *  - 현재 페이지가 대기 항목이면 다운로드 → 완료 표시 → 다음 항목으로 이동
- *  - 아니면 첫 대기 항목으로 이동
- * @param {() => Promise<any>} downloadFn 현재 시리즈 전체 다운로드(예: () => tokiDownload(undefined, policy))
- */
-export async function maybeRunQueue(downloadFn) {
-    if (_ranThisLoad) return;
-    if (window.self !== window.top) return;       // iframe 안에서는 동작 금지
-    // top 컨텍스트에서 lease 다운로드 콜백을 보관 — 이후 remote.js 폴링이 reload 없이 runLeaseQueue 를
-    //   인자 없이 재호출할 수 있게 한다(isRunning 여부와 무관하게 등록해야 첫 시작도 폴링이 가동 가능).
-    if (downloadFn) _leaseDownloadFn = downloadFn;
-    if (!isRunning()) return;
-    _ranThisLoad = true;
-
-    const logger = LogBox.getInstance();
-    let q = getQueue();
-    let pending = q.filter(i => i.status === 'pending');
-    if (pending.length === 0) {
-        setRunning(false);
-        logger.success('✅ 큐 전체 완료', 'Queue');
-        Notifier.notify('TokiSync', '다운로드 큐 전체 완료!');
-        return;
-    }
-
-    // [멀티-IP lease 분기] pending 에 lease unit(unitId)이 있으면 부모 탭은 회차로 navigate 하지 않는다.
-    //   부모는 현재 페이지(시리즈 목록 등 같은 origin)에 고정한 채, 워커 팝업만 회차 URL 들을 순회하며 본문+메타 회신.
-    //   → 메타 정확도(불안정한 회차페이지 재추출 제거) + 안티탐지(컨트롤러가 회차 probe 에 노출 안 됨).
-    //   단일/벌크(시리즈 URL, unitId 없음)는 아래 기존 navigation 경로를 그대로 탄다(회귀 금지).
-    if (pending.some(i => i.unitId)) {
-        await runLeaseQueue(downloadFn);
-        return;
-    }
-
-    const curKey = pathKey(location.href);
-    const active = q.find(i => i.status === 'pending' && pathKey(i.url) === curKey);
-
-    if (!active) {
-        // 현재 페이지가 큐 항목이 아님 → 첫 대기 항목으로 이동
-        const next = pending[0];
-        logger.log(`📋 큐: 다음 시리즈로 이동 (${next.url})`, 'Queue');
-        setTimeout(() => { location.href = next.url; }, 5000);
-        return;
-    }
-
-    // 현재 페이지 = 활성 항목 → 다운로드 실행
-    const idx = q.indexOf(active);
-    const pos = q.filter(i => i.status !== 'pending').length + 1;
-    logger.show();
-    logger.log(`📋 큐 처리 ${pos}/${q.length}: ${location.href}`, 'Queue');
-    _emitProgress({ phase: '다운로드 중', pos, total: q.length, url: location.href });
     try {
-        await downloadFn(active); // active 항목 전달 → lease unit(회차)이면 단일 회차 다운로드
-        active.status = 'done';
-        active.title = document.title || active.title;
-        logger.success(`📋 큐 항목 완료 (${pos}/${q.length})`, 'Queue');
-        _emitProgress({ phase: '항목 완료', pos, total: q.length, url: location.href });
+      LogBox.getInstance().updateProgressUI();
+    } catch (uiErr) {}
+  } catch (e) {
+    console.error('[TokiSync Queue] Failed to save queue to storage:', e);
+  }
+};
+
+const isLeaseQueueItem = (item) => !!(item && item.unitId);
+
+// 32비트 FNV-1a 해시를 36진수 아스키 문자열로 변환하여 한글 유실 없는 고유 아스키 ID 보장
+function tokiHash(str) {
+  let hash = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash).toString(36);
+}
+
+/**
+ * 작품명과 회차번호 기반의 고유 FNV 해시 ID 생성 헬퍼
+ */
+export const getQueueItemId = (title, episodeNum) => {
+  const hashPart = tokiHash(`${title}_${episodeNum}`);
+  return `toki_${hashPart}`;
+};
+
+
+/**
+ * 대기열 전체 목록 조회
+ */
+export const getQueue = () => {
+  return getRawQueue();
+};
+
+/**
+ * 에피소드 대기열 다중 추가
+ */
+export const addEpisodesToQueue = (episodes, novelTitle) => {
+  const queue = getRawQueue();
+  let addedCount = 0;
+  let updatedCount = 0;
+
+  episodes.forEach(ep => {
+    // FNV 해시를 적용하여 작품명 한글 유실을 차단하고 100% 안전한 고유 아스키 식별자 생성
+    const hashPart = tokiHash(`${novelTitle}_${ep.episodeNum}`);
+    const id = `toki_${hashPart}`;
+    
+    // 이미 존재하는지 중복성 검사
+    const existingIndex = queue.findIndex(item => item.id === id);
+    if (existingIndex === -1) {
+      queue.push({
+        id,
+        title: novelTitle,
+        episodeTitle: ep.title,
+        episodeUrl: ep.url,
+        episodeNum: ep.episodeNum || '',
+        folderId: ep.folderId || '',             // 구글 드라이브 스캔 위치 폴더 ID 보존
+        category: ep.category || 'Manga',       // 파서 룰 카테고리 (워커 targetType 판별용)
+        viewerCfg: ep.viewerCfg || {},           // 파서 룰 viewer 설정 (워커 이미지 셀렉터용)
+        rootFolder: ep.rootFolder || '',
+        destination: ep.destination || 'local',
+        novelFormat: ep.novelFormat || 'epub',
+        matchedRule: ep.matchedRule || {},
+        protocolDomain: ep.protocolDomain || '',
+        unitId: ep.unitId || '',                  // 멀티-IP lease 서버 unit.id — 완료 /complete 매핑용
+        cover: ep.cover || '',                    // lease 자동 펼침 메타: EPUB cover 삽입용
+        meta: ep.meta || null,                    // lease 자동 펼침 메타: ComicInfo/EPUB metadata용
+        series: ep.series || ep.rootFolder || '',
+        status: 'pending',
+        progressPercent: 0,
+        stage: WORKER_STAGE.INIT,
+        retryCount: 0,
+        reported: false,
+        addedAt: Date.now()
+      });
+      addedCount++;
+    } else {
+      const existing = queue[existingIndex];
+      const metadataUpdates = {};
+
+      // 기존 버전에서 lease 메타가 누락된 큐 항목을 중복 주입 시점에 보강한다.
+      // 상태는 건드리지 않는다. completed/failed 항목은 remote poll이 보강된 unitId로 /complete를 보고한다.
+      if (ep.unitId && existing.unitId !== ep.unitId) {
+        metadataUpdates.unitId = ep.unitId;
+        metadataUpdates.reported = false;
+      }
+      if (ep.cover && !existing.cover) metadataUpdates.cover = ep.cover;
+      if (ep.meta && !existing.meta) metadataUpdates.meta = ep.meta;
+      if ((ep.series || ep.rootFolder) && !existing.series) metadataUpdates.series = ep.series || ep.rootFolder;
+
+      if (Object.keys(metadataUpdates).length > 0) {
+        queue[existingIndex] = { ...existing, ...metadataUpdates };
+        updatedCount++;
+      }
+    }
+  });
+
+  if (addedCount > 0 || updatedCount > 0) {
+    saveRawQueue(queue);
+  }
+  return addedCount;
+};
+
+/**
+ * 특정 큐 아이템 상태 및 정보 갱신
+ */
+export const updateQueueItem = (id, updates) => {
+  const queue = getRawQueue();
+  const index = queue.findIndex(item => item.id === id);
+
+  if (index !== -1) {
+    queue[index] = {
+      ...queue[index],
+      ...updates,
+      completedAt: updates.status === 'completed' ? Date.now() : queue[index].completedAt
+    };
+    saveRawQueue(queue);
+    return true;
+  }
+  return false;
+};
+
+/**
+ * 팝업 재사용(Relay) 시 디스크 I/O 갭으로 인한 세마포어 중복 기동을 차단하기 위한 원자적 전이 함수
+ */
+export const transitionQueueItemsForRelay = (completedId, nextId) => {
+  const queue = getRawQueue();
+  let changed = false;
+
+  const compIndex = queue.findIndex(item => item.id === completedId);
+  if (compIndex !== -1) {
+    queue[compIndex] = {
+      ...queue[compIndex],
+      status: 'completed',
+      stage: WORKER_STAGE.COMPLETED,
+      progressPercent: 100,
+      completedAt: Date.now()
+    };
+    changed = true;
+  }
+
+  const nextIndex = queue.findIndex(item => item.id === nextId);
+  if (nextIndex !== -1) {
+    queue[nextIndex] = {
+      ...queue[nextIndex],
+      status: 'processing',
+      stage: WORKER_STAGE.INIT,
+      progressPercent: 0
+    };
+    changed = true;
+  }
+
+  if (changed) {
+    saveRawQueue(queue);
+  }
+  return changed;
+};
+
+/**
+ * 특정 큐 아이템의 실시간 진행률 고속 갱신
+ */
+export const updateQueueItemProgress = (id, percent) => {
+  const sanitizedPercent = Math.min(100, Math.max(0, Math.round(percent)));
+  return updateQueueItem(id, { progressPercent: sanitizedPercent });
+};
+
+/**
+ * 대기열 전체 초기화
+ */
+export const clearQueue = () => {
+  saveRawQueue([]);
+};
+
+/**
+ * 완료된(completed) 항목들 일괄 삭제
+ */
+export const removeCompletedItems = () => {
+  const queue = getRawQueue();
+  const filtered = queue.filter(item => item.status !== 'completed');
+  saveRawQueue(filtered);
+};
+
+/**
+ * 특정 큐 아이템을 대기열에서 개별 제거
+ * 만약 진행 중인(processing) 아이템이라면 활성 자식 팝업을 강제 폐쇄 처리
+ */
+export const removeQueueItem = (id) => {
+  const queue = getRawQueue();
+  const index = queue.findIndex(item => item.id === id);
+  if (index !== -1) {
+    const item = queue[index];
+    // 진행 중인 워커인 경우 팝업 즉시 강제 폐쇄 및 맵에서 삭제
+    if (item.status === 'processing') {
+      const popupRef = activeWorkers.get(id);
+      try {
+        if (popupRef && !popupRef.closed) {
+          popupRef.close();
+        }
+      } catch (e) {
+        console.warn(`[Queue] 개별 삭제 중 자식 팝업 close 실패: ${id}`, e);
+      }
+      activeWorkers.delete(id);
+      closedCounts.delete(id);
+    }
+    
+    const filtered = queue.filter(q => q.id !== id);
+    saveRawQueue(filtered);
+    return true;
+  }
+  return false;
+};
+
+/**
+ * 완료(completed) 및 실패(failed) 항목들 일괄 삭제 (큐 청소)
+ */
+export const removeCompletedAndFailedItems = () => {
+  const queue = getRawQueue();
+  const filtered = queue.filter(item => item.status !== 'completed' && item.status !== 'failed');
+  saveRawQueue(filtered);
+};
+
+/**
+ * 현재 대기열의 상태별 카운트 통계 조회
+ */
+export const getQueueStats = () => {
+  const queue = getRawQueue();
+  const stats = {
+    total: queue.length,
+    pending: 0,
+    processing: 0,
+    completed: 0,
+    failed: 0
+  };
+
+  queue.forEach(item => {
+    if (stats[item.status] !== undefined) {
+      stats[item.status]++;
+    }
+  });
+
+  return stats;
+};
+
+// =============================================================
+// 🚦 [2단계] 백그라운드 세마포어 및 이벤트 기반 스케줄러 구현
+// =============================================================
+
+const PAUSED_KEY = 'tokisync_queue_paused';
+
+/**
+ * 전역 큐 일시 정지 상태 조회 (GM 스토리지 연동으로 멀티 탭 실시간 공유)
+ */
+export const getQueuePaused = () => {
+  try {
+    if (typeof GM_getValue !== 'undefined') {
+      return GM_getValue(PAUSED_KEY, false);
+    }
+    if (typeof localStorage !== 'undefined') {
+      return localStorage.getItem(PAUSED_KEY) === 'true';
+    }
+  } catch (e) {}
+  return false;
+};
+
+/**
+ * 전역 큐 일시 정지 상태 설정
+ */
+export const setQueuePaused = (paused) => {
+  try {
+    if (typeof GM_setValue !== 'undefined') {
+      GM_setValue(PAUSED_KEY, paused);
+      return;
+    }
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(PAUSED_KEY, String(paused));
+    }
+  } catch (e) {}
+};
+
+/**
+ * 모든 자식 팝업을 강제 폐쇄하고 큐를 중단 청소하는 완전 정지
+ */
+export const stopAllWorkers = () => {
+  console.log('[Queue] ⏹️ 모든 활성 자식 팝업 강제 폐쇄 및 수집 중단 집행...');
+  
+  // 1. 모든 팝업 창 즉시 닫기
+  for (const [id, popupRef] of activeWorkers.entries()) {
+    try {
+      if (popupRef && !popupRef.closed) {
+        popupRef.close();
+      }
     } catch (e) {
-        active.status = 'error';
-        active.error = e && e.message ? e.message : String(e);
-        logger.error(`📋 큐 항목 실패: ${active.error}`, 'Queue');
-        _emitProgress({ phase: '항목 실패', pos, total: q.length, url: location.href, error: active.error });
+      console.warn(`[Queue] 팝업 close 오류: ${id}`, e);
     }
-    // 저장(인덱스 보존)
-    q[idx] = active;
-    saveQueue(q);
+  }
+  activeWorkers.clear();
+  closedCounts.clear();
 
-    // 다음 대기 항목으로
-    const next = getQueue().find(i => i.status === 'pending');
-    if (next) {
-        logger.log('📋 5초 후 다음 시리즈로 이동...', 'Queue');
-        setTimeout(() => { location.href = next.url; }, 5000);
-    } else {
-        setRunning(false);
-        logger.success('✅ 큐 전체 완료', 'Queue');
-        Notifier.notify('TokiSync', '다운로드 큐 전체 완료!');
+  // 2. 큐 대기열 전체 청소 및 중단 마킹
+  const queue = getRawQueue();
+  const updatedQueue = queue.map(item => {
+    if (item.status === 'pending' || item.status === 'processing') {
+      return {
+        ...item,
+        status: 'failed',
+        stage: WORKER_STAGE.FAILED,
+        errorMsg: '사용자에 의해 수집이 강제로 중단되었습니다.'
+      };
     }
-}
+    return item;
+  });
+  saveRawQueue(updatedQueue);
+
+  // 3. 일시 정지 해제
+  setQueuePaused(false);
+};
+
+let isSchedulerRunning = false;
+
+// 인간 행동 모방 랜덤 지연시간(Jitter Delay) 유틸리티
+const sleepJitter = (minMs, maxMs) => {
+  const delay = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
+  return new Promise(resolve => setTimeout(resolve, delay));
+};
 
 /**
- * [멀티-IP lease 전용] 부모 탭을 고정한 채 pending lease unit 을 **reload 없이** 연속 처리하는 루프.
- *   각 unit 은 downloadFn(item) 으로 다운로드 — downloadSingleEpisode 가 unit.url(회차)로 워커 팝업만 띄워
- *   본문을 수집하고, 메타는 unit 의 권위값(series/num/title)을 그대로 쓴다. 부모는 회차로 navigate 하지 않는다.
- *   설계: 한 번 진입하면 pending 이 소진되거나 정지될 때까지 같은 컨텍스트에서 계속 돈다.
- *     새 lease 는 remote.js 폴링(setInterval)이 백그라운드로 보충 → 다음 루프 이터레이션이 집어간다.
- *     → 회차마다/배치마다 부모 탭을 새로고침하던 동작 제거(사용자 체감: 같은 페이지가 계속 reload 되는 문제 해결).
- *   재진입 가드(_leaseBusy): 폴링이 매 주기 호출해도 이미 루프 중이면 즉시 반환(중복 실행 방지).
- *   downloadFn 보관(_leaseDownloadFn): main()의 maybeRunQueue 가 1회 등록하면 이후 폴링/메뉴가 인자 없이 재호출 가능.
- * @param {(item:any)=>Promise<any>} [downloadFn] 큐 항목 1개 다운로드. 생략 시 보관된 콜백 사용.
+ * 1회성 스케줄링 기동 검사 (세마포어 알고리즘)
  */
-export async function runLeaseQueue(downloadFn) {
-    downloadFn = downloadFn || _leaseDownloadFn;
-    if (downloadFn) _leaseDownloadFn = downloadFn;     // 폴링/메뉴의 인자 없는 재호출용 보관
-    if (!downloadFn) return;
-    if (_leaseBusy) return;                            // 이미 루프 중 → 중복 폴링 호출 흡수
-    _leaseBusy = true;
-    setRunning(true);
-    const logger = LogBox.getInstance();
-    logger.show();
-    let idle = 0;
-    try {
-        while (isRunning()) {                          // 정지(paused→stopQueue) 시 isRunning()=false 로 루프 종료
-            const q = getQueue();
-            const item = q.find((i) => i.unitId && i.status === 'pending');
-            if (!item) {
-                // pending 이 잠시 빔(폴링 보충 대기). 짧게 쉬고 재확인, 일정 시간 계속 비면 배치 종료
-                //   (폴링이 새 lease 를 받으면 _leaseBusy 해제 후 다시 이 루프를 호출해 깨운다 — reload 불필요).
-                if (++idle >= 4) break;
-                await _sleep(1500);
-                continue;
-            }
-            idle = 0;
-            const pos = q.filter((i) => i.status !== 'pending').length + 1;
-            logger.log(`📋 lease 처리 ${pos}/${q.length}: ${item.url}`, 'Queue');
-            _emitProgress({ phase: '다운로드 중', pos, total: q.length, url: item.url });
-            try {
-                await downloadFn(item);                // 회차 1개 = 워커 팝업 단일 다운로드
-                item.status = 'done';
-                // ⚠️ 부모는 회차 페이지가 아니므로 document.title 로 덮어쓰지 않는다(목록 제목 오염 방지). 권위 라벨 보존.
-                logger.success(`📋 lease 항목 완료 (${pos}/${q.length})`, 'Queue');
-                _emitProgress({ phase: '항목 완료', pos, total: q.length, url: item.url });
-            } catch (e) {
-                item.status = 'error';
-                item.error = e && e.message ? e.message : String(e);
-                logger.error(`📋 lease 항목 실패: ${item.error}`, 'Queue');
-                _emitProgress({ phase: '항목 실패', pos, total: q.length, url: item.url, error: item.error });
-            }
-            // 최신 큐에 반영(폴링이 동시 갱신했어도 해당 unitId 만 갱신해 타 항목/순서 보존)
-            const q2 = getQueue();
-            const wi = q2.findIndex((i) => i.unitId === item.unitId);
-            if (wi >= 0) { q2[wi] = item; saveQueue(q2); }
+export const runSchedulerOnce = async () => {
+  if (getQueuePaused()) {
+    isSchedulerRunning = false;
+    return;
+  }
+  if (isSchedulerRunning) return;
+  isSchedulerRunning = true;
+
+  try {
+    const queue = getRawQueue();
+    
+    // Liveness Check: 실제 열려있는 팝업 중 닫힌 팝업이 있는지 감지하여 failed 전이
+    for (const [id, popupRef] of activeWorkers.entries()) {
+      if (popupRef && popupRef.closed) {
+        // 일시적인 closed 레이스 컨디션 방지를 위한 유예 카운트 (연속 3회 감지 시 강제 폐쇄 확정)
+        const closedCount = (closedCounts.get(id) || 0) + 1;
+        closedCounts.set(id, closedCount);
+
+        if (closedCount >= 3) {
+          console.warn(`[Queue Scheduler] ⚠️ 자식 팝업 비정상 종료 확정 (연속 3회 감지): ${id}`);
+          activeWorkers.delete(id);
+          closedCounts.delete(id);
+          const item = queue.find(i => i.id === id);
+          if (item && item.status === 'processing') {
+            const nextRetry = item.retryCount + 1;
+            updateQueueItem(id, { 
+              status: nextRetry >= 3 ? 'failed' : 'pending', 
+              retryCount: nextRetry,
+              errorMsg: '자식 팝업 창이 비정상적으로 강제 종료되었습니다.' 
+            });
+          }
+        } else {
+          console.log(`[Queue Scheduler] 🛡️ 자식 팝업 일시적 closed 감지 유예 중 (${closedCount}/3): ${id}`);
         }
-    } finally {
-        _leaseBusy = false;
-        setRunning(false);
+      } else {
+        // 정상 기동 확인 시 유예 카운터 즉시 리셋
+        closedCounts.set(id, 0);
+      }
     }
-}
 
-/** 큐 관리 모달 (자체 포함 DOM, dsx-modal 스타일 재사용) */
-export function openQueueModal() {
-    const existing = document.getElementById('dsx-queue-modal');
-    if (existing) existing.remove();
+    // 1. 현재 processing(작업 중) 상태인 큐 아이템의 개수를 산출
+    const currentProcessing = queue.filter(item => item.status === 'processing');
 
-    const q = getQueue();
-    const running = isRunning();
-    const rows = q.map((it, i) => {
-        const icon = it.status === 'done' ? '✅' : it.status === 'error' ? '❌' : '⏳';
-        const label = it.title ? `${it.title}` : it.url;
-        return `<div class="dsx-q-row" data-i="${i}">
-            <span class="dsx-q-ic">${icon}</span>
-            <span class="dsx-q-url" title="${it.url.replace(/"/g, '&quot;')}">${label.replace(/</g, '&lt;')}</span>
-            <button class="dsx-q-del" data-i="${i}" title="제거">✕</button>
-        </div>`;
-    }).join('') || '<div class="dsx-q-empty">큐가 비어 있습니다. 시리즈 URL을 추가하세요.</div>';
+    // 2. pending(대기 중) 상태인 첫 번째 에피소드 추출
+    const nextItem = queue.find(item => item.status === 'pending');
+    if (!nextItem) {
+      isSchedulerRunning = false;
+      return;
+    }
 
-    const overlay = document.createElement('div');
-    overlay.id = 'dsx-queue-modal';
-    overlay.className = 'dsx-modal-overlay';
-    overlay.innerHTML = `
-        <style>
-          #dsx-queue-modal .dsx-q-list{max-height:240px;overflow-y:auto;margin:6px 0;display:flex;flex-direction:column;gap:4px}
-          #dsx-queue-modal .dsx-q-row{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;background:rgba(255,255,255,.06);font-size:12px}
-          #dsx-queue-modal .dsx-q-ic{flex:0 0 auto}
-          #dsx-queue-modal .dsx-q-url{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-          #dsx-queue-modal .dsx-q-del{flex:0 0 auto;background:transparent;border:none;color:#f87171;cursor:pointer;font-size:13px}
-          #dsx-queue-modal .dsx-q-empty{padding:12px;opacity:.6;font-size:12px;text-align:center}
-        </style>
-        <div class="dsx-modal dsx-modal-main">
-            <div class="dsx-modal-header dsx-modal-header-borderless">
-                <div class="dsx-modal-title dsx-text-lg">📋 다운로드 큐 ${running ? '<span style="color:#34d399">(실행 중)</span>' : ''}</div>
-            </div>
-            <div class="dsx-section-title dsx-mt-0">시리즈 URL 추가 (줄바꿈으로 여러 개)</div>
-            <div class="dsx-control-group">
-                <textarea id="dsx-q-input" class="dsx-textarea" rows="4" placeholder="https://.../comic/12345&#10;https://.../webtoon/67890"></textarea>
-            </div>
-            <div class="dsx-btn-group-row">
-                <button id="dsx-q-add" class="dsx-btn-action dsx-btn-secondary">+ 추가</button>
-                <button id="dsx-q-add-cur" class="dsx-btn-action dsx-btn-secondary">+ 현재 페이지</button>
-            </div>
-            <div class="dsx-section-title">대기열 (${q.length})</div>
-            <div id="dsx-q-list" class="dsx-q-list">${rows}</div>
-            <div class="dsx-modal-footer dsx-btn-group-row dsx-mt-32">
-                <button id="dsx-q-clear" class="dsx-btn-action dsx-btn-secondary">비우기</button>
-                ${running
-                    ? '<button id="dsx-q-stop" class="dsx-btn-action">⏸️ 정지</button>'
-                    : '<button id="dsx-q-start" class="dsx-btn-action">▶️ 시작</button>'}
-            </div>
-        </div>`;
-    document.body.appendChild(overlay);
+    // 3. 동시성 임계값 도달 시 즉시 대기 차단
+    //    leaseMax는 서버에서 "보유할 작업 수"일 뿐, 클라이언트 실행 팝업 수가 아니다.
+    //    unitId가 있는 멀티-IP lease 작업은 클라당 1개씩 순차 처리해 팝업 난립을 막는다.
+    const hasLeaseProcessing = currentProcessing.some(isLeaseQueueItem);
+    const maxConcurrency = (hasLeaseProcessing || isLeaseQueueItem(nextItem))
+      ? LEASE_MAX_CONCURRENCY
+      : MAX_CONCURRENCY;
+    if (currentProcessing.length >= maxConcurrency) {
+      isSchedulerRunning = false;
+      return;
+    }
 
-    const refresh = () => openQueueModal();
-    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    // [v1.21.4] 안전 장치: 이미 activeWorkers가 점유하고 있는 아이템이라면 중복 기동 방지 스킵
+    if (activeWorkers.has(nextItem.id)) {
+      console.log(`[Queue Scheduler] 🛡️ 중복 기동 우회: activeWorkers에 이미 점유된 에피소드 스킵: ${nextItem.episodeTitle}`);
+      isSchedulerRunning = false;
+      return;
+    }
 
-    overlay.querySelector('#dsx-q-add').onclick = () => {
-        const n = addUrls(document.getElementById('dsx-q-input').value);
-        tokiAlert(n > 0 ? `${n}개 추가됨` : '추가된 URL이 없습니다 (중복 또는 형식 오류).');
-        refresh();
-    };
-    overlay.querySelector('#dsx-q-add-cur').onclick = () => {
-        const n = addUrls(location.href);
-        tokiAlert(n > 0 ? '현재 페이지 추가됨' : '이미 큐에 있습니다.');
-        refresh();
-    };
-    overlay.querySelectorAll('.dsx-q-del').forEach(btn => {
-        btn.onclick = () => {
-            const i = parseInt(btn.dataset.i, 10);
-            const arr = getQueue(); arr.splice(i, 1); saveQueue(arr); refresh();
-        };
-    });
-    overlay.querySelector('#dsx-q-clear').onclick = () => { clearQueue(); refresh(); };
-    const startBtn = overlay.querySelector('#dsx-q-start');
-    if (startBtn) startBtn.onclick = () => { overlay.remove(); startQueue(); };
-    const stopBtn = overlay.querySelector('#dsx-q-stop');
-    if (stopBtn) stopBtn.onclick = () => { stopQueue(); refresh(); };
-}
+    // 4. 인간 행동 모사를 위한 1.5초~3초 랜덤 지연 완충
+    console.log(`[Queue Scheduler] 🛡️ 안전 지연 대기 시작 (Target: ${nextItem.episodeTitle})`);
+    await sleepJitter(1500, 3000);
 
-/** GM 메뉴에 큐 열기 등록 */
-export function registerQueueMenu() {
-    try {
-        if (typeof GM_registerMenuCommand !== 'undefined' && window.self === window.top) {
-            GM_registerMenuCommand('📋 다운로드 큐', openQueueModal);
+    // 5. 팝업 실행 및 상태 갱신
+    console.log(`[Queue Scheduler] 🚀 팝업 릴레이 기동: ${nextItem.episodeTitle} (${nextItem.episodeUrl})`);
+    updateQueueItem(nextItem.id, { status: 'processing' });
+    
+    // 유효한 기존 팝업 채널 재사용 탐색
+    let recycledPopup = null;
+    let targetSlotId = null;
+
+    // 2개의 슬롯 중 비어있거나 완료된 팝업 슬롯을 탐색하여 재사용
+    for (const [id, popupRef] of activeWorkers.entries()) {
+        const item = queue.find(i => i.id === id);
+        if (popupRef && !popupRef.closed && (!item || item.status === 'completed' || item.status === 'failed')) {
+            recycledPopup = popupRef;
+            targetSlotId = id;
+            break;
         }
-    } catch {}
-}
+    }
+
+    if (recycledPopup) {
+        const targetWindowName = `tokisync_novel_worker_${targetSlotId}`.replace(/[^a-zA-Z0-9_]/g, '');
+        const newWindowName = `tokisync_novel_worker_${nextItem.id}`.replace(/[^a-zA-Z0-9_]/g, '');
+
+        console.log(`[Queue Scheduler] ♻️ 기존 자식 팝업 슬롯 재사용 (이름: ${targetWindowName} -> 신규: ${newWindowName})`);
+        // activeWorkers 정리 및 교체
+        activeWorkers.delete(targetSlotId);
+        activeWorkers.set(nextItem.id, recycledPopup);
+
+        try {
+            // [CORS 우회 우주 표준 기법] 기존 window.name을 타겟으로 window.open을 호출하면
+            // 새 창을 띄우지 않고 동일 팝업창 내에서 URL 리다이렉션이 성공하며, 팝업 차단막도 우회합니다!
+            const width = 400;
+            const height = 600;
+            const left = window.screen.width - width - 50;
+            const top = 100;
+            
+            const updatedPopup = window.open(
+                nextItem.episodeUrl,
+                targetWindowName,
+                `width=${width},height=${height},left=${left},top=${top},noopener=false,scrollbars=yes,resizable=yes`
+            );
+            
+            if (updatedPopup) {
+                // 통신 식별자 갱신
+                updatedPopup.name = newWindowName;
+                activeWorkers.set(nextItem.id, updatedPopup);
+            }
+        } catch (err) {
+            console.error('[Queue Scheduler] 릴레이 window.open 우회 실패, 일반 리다이렉션 시도:', err);
+            try {
+                recycledPopup.location.href = nextItem.episodeUrl;
+                recycledPopup.name = newWindowName;
+                activeWorkers.set(nextItem.id, recycledPopup);
+            } catch (hrefErr) {
+                console.error('[Queue Scheduler] 팝업 릴레이 강제 실패:', hrefErr);
+            }
+        }
+    } else {
+        // 가용 팝업이 없을 때만 물리적 open 수행 (최초 진입 시 2회만 동작)
+        const popupRef = openEpisodePopup(nextItem.episodeUrl, nextItem.id);
+        if (popupRef) {
+            activeWorkers.set(nextItem.id, popupRef);
+        } else {
+            // 팝업 차단 등으로 창 생성 실패 시 즉시 failed 처리
+            updateQueueItem(nextItem.id, { 
+                status: 'failed', 
+                errorMsg: '브라우저 팝업 차단막에 의해 창 생성에 실패했습니다.' 
+            });
+        }
+    }
+
+  } catch (err) {
+    console.error('[Queue Scheduler] Error in scheduling loop:', err);
+  } finally {
+    isSchedulerRunning = false;
+  }
+};
+
+// 팝업 기동 가교 (window.open 래퍼)
+const openEpisodePopup = (url, id) => {
+  try {
+    // Node.js 테스트 환경 등 윈도우 객체가 실존하지 않는 환경에서의 안전 예외처리
+    if (typeof window === 'undefined' || typeof window.open === 'undefined') {
+      // 가상 Mocking 반환
+      return { closed: false };
+    }
+    
+    // 봇 감지 회피 절충안 규격 (400x600, right-aligned)
+    const width = 400;
+    const height = 600;
+    const left = window.screen.width - width - 50;
+    const top = 100;
+    
+    const popupRef = window.open(
+      url, 
+      `tokisync_novel_worker_${id}`.replace(/[^a-zA-Z0-9_]/g, ''), 
+      `width=${width},height=${height},left=${left},top=${top},noopener=false,scrollbars=yes,resizable=yes`
+    );
+    return popupRef;
+  } catch (e) {
+    console.error('[Queue Scheduler] Popup launch failed:', e);
+    return null;
+  }
+};
+
+/**
+ * 이벤트 기반 백그라운드 세마포어 스케줄러 등록
+ */
+export const initQueueScheduler = () => {
+  // 1. Tampermonkey 네이티브 비동기 스토리지 리스너 감시 활성화
+  if (typeof GM_addValueChangeListener !== 'undefined') {
+    GM_addValueChangeListener(STORAGE_KEY, (key, oldValue, newValue, remote) => {
+      // 대기열 변동 이벤트가 오면 1회성 스케줄러 즉시 발동
+      runSchedulerOnce();
+    });
+    console.log('[TokiSync Queue] 🚦 이벤트 기반(Event-Driven) 고성능 스케줄러가 활성화되었습니다.');
+  } else {
+    // Fallback: GM API가 없는 가상 유닛 테스트/샌드박스 환경에서는 2초 주기 폴링 작동
+    setInterval(() => {
+      runSchedulerOnce();
+    }, 2000);
+    console.warn('[TokiSync Queue] ⚠️ GM_addValueChangeListener 미지원 환경. 2초 폴링 스케줄러로 기동합니다.');
+  }
+
+  // 초기 기동 시에도 즉시 1회 검사
+  runSchedulerOnce();
+};

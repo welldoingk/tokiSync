@@ -5,13 +5,13 @@ import { detectSite } from './detector.js';
 import { EpubBuilder } from './epub.js';
 import { CbzBuilder } from './cbz.js';
 import { TxtBuilder } from './txt.js';
-import { LogBox, Notifier, tokiAlert, tokiConfirm } from './ui.js';
-import { getConfig, isConfigValid, getCbzCompression, getConcurrency } from './config.js';
+import { LogBox, Notifier } from './ui.js';
+import { getConfig, isConfigValid } from './config.js';
 import { startSilentAudio, stopSilentAudio } from './anti_sleep.js';
 import { fetchHistory, refreshCacheAfterUpload, getBooksByCacheId, initUpdateUploadViaGASRelay, getMergeIndexFragment } from './gas.js';
-import { fetchHistoryDirect, checkSingleHistoryDirect, updateDirect } from './network.js';
-import { fetchHistoryWebDav, isWebDavConfigValid } from './webdav.js';
-import { fetchNovelText, fetchComicImages, closeActivePopup } from './novel-decryptor.js';
+import { fetchHistoryDirect, checkSingleHistoryDirect, getOAuthToken, getOrCreateFolder } from './network.js';
+import { fetchNovelText, fetchComicImages, closeActiveWorker, initBatchWorkerController } from './worker-controller.js';
+import { addEpisodesToQueue, initQueueScheduler, activeWorkers, WORKER_STAGE, updateQueueItem, getQueue, removeQueueItem, getQueueItemId } from './queue.js';
 
 // Sleep Policy Presets
 const SLEEP_POLICIES = {
@@ -22,7 +22,7 @@ const SLEEP_POLICIES = {
     very_slow: { min: 10000, max: 30000 } // 매우 느림 (10-30초)
 };
 
-export async function processItem(item, builder, siteInfo, iframe, parser, seriesTitle = "", targetDoc = null) {
+export async function processItem(item, builder, siteInfo, iframe, parser, seriesTitle = "", targetDoc = null, rootFolder = "") {
     const { category } = siteInfo;
     const isNovel = (category === 'Novel' || category === 'novel');
     const viewerCfg = parser.rule.viewer || {};
@@ -31,81 +31,80 @@ export async function processItem(item, builder, siteInfo, iframe, parser, serie
     const config = getConfig();
     let policy = SLEEP_POLICIES[config.sleepMode] || SLEEP_POLICIES.agile;
 
-    if (isNovel) {
-        logger.log(`[소설] 추출 중: ${item.title}`, 'Downloader');
+    const id = getQueueItemId(seriesTitle, item.num ? item.num.toString() : '');
+    const destination = (config.policy === 'native') ? 'native' : (config.gasUrl ? 'drive' : 'local');
+    
+    // 상태를 'processing'으로 올려 즉시 실시간 수집 연동 시작 (단일/로컬 워커 진행률 연동용)
+    updateQueueItem(id, { status: 'processing', stage: WORKER_STAGE.INIT });
 
-        const text = await fetchNovelText(item.src, {
-            ...(viewerCfg.decryptApi || {}),
-            viewerCfg: viewerCfg
-        });
+    const finalRootFolder = rootFolder || seriesTitle || 'UnknownSeries';
 
-        if (text) {
-            builder.addChapter(item.title, text);
-            logger.log(`✅ 추출 성공: ${item.title}`, 'Downloader');
-        } else {
-            throw new Error(`추출 실패 (본문 응답 없음)`);
-        }
+    try {
+        if (isNovel) {
+            logger.log(`[소설] 추출 중: ${item.title}`, 'Downloader');
 
-        await sleep(policy.min, policy.max);
-    } 
-    else {
-        logger.log(`[만화] 추출 중: ${item.title}`, 'Downloader');
-
-        // 자식 팝업 내부에서 스크롤 로드 및 이미지 다운로드까지 전담하여 ArrayBuffer 패키지 회신
-        const popupImages = await fetchComicImages(item.src, {
-            viewerCfg: viewerCfg
-        });
-
-        if (popupImages && popupImages.length > 0) {
-            // 부모 탭에서 ArrayBuffer 패키지를 Blob 배열로 환원 (MIME 형식 기반 확장자 유입)
-            const resolvedImages = popupImages.map(img => {
-                const getExtFromMime = (mime) => {
-                    if (!mime) return '.jpg';
-                    const lower = mime.toLowerCase();
-                    if (lower.includes('png')) return '.png';
-                    if (lower.includes('webp')) return '.webp';
-                    if (lower.includes('gif')) return '.gif';
-                    return '.jpg';
-                };
-
-                const mimeType = img.type || 'image/jpeg';
-                const ext = getExtFromMime(mimeType);
-
-                if (img.data) {
-                    return {
-                        url: img.url,
-                        blob: new Blob([img.data], { type: mimeType }),
-                        ext: ext,
-                        isMissing: false
-                    };
-                } else {
-                    return {
-                        url: img.url,
-                        blob: new Blob([]),
-                        ext: ext,
-                        isMissing: true
-                    };
-                }
+            const result = await fetchNovelText(item.src, {
+                decryptApi: viewerCfg.decryptApi || null,
+                viewerCfg: viewerCfg,
+                seriesTitle: seriesTitle,
+                rootFolder: finalRootFolder,
+                queueId: id,
+                episodeTitle: item.title,
+                episodeNum: item.num,
+                folderId: item.folderId || config.folderId || '',
+                destination: destination,
+                novelFormat: config.novelFormat || 'epub',
+                matchedRule: parser.rule,
+                protocolDomain: parser.protocolDomain,
+                scanSpeedMultiplier: config.scanSpeed,
+                localNameTemplate: config.localNameTemplate,
+                localEpisodePadding: config.localEpisodePadding
             });
 
-            // 제목 정제 규칙 적용
-            let chapterTitleOnly = item.title;
-            if (seriesTitle && chapterTitleOnly.startsWith(seriesTitle)) {
-                chapterTitleOnly = chapterTitleOnly.replace(seriesTitle, '').trim();
+            if (result === true) {
+                logger.log(`... [자립형 워커] 소설 수집 및 드라이브/로컬 저장 성공: ${item.title}`, 'Downloader');
+                await sleep(policy.min, policy.max);
+                return true; // Self-contained completed
+            } else if (typeof result === 'string') {
+                // Plan C Fallback (API Decryption) - runs locally in parent
+                builder.addChapter(item.title, result);
+                logger.log(`... [Plan C API 폴백] 추출 성공: ${item.title}`, 'Downloader');
+                await sleep(policy.min, policy.max);
+                return false; // Requires parent to save
+            } else {
+                throw new Error(`추출 실패 (소설 본문 응답 없음)`);
             }
+        } 
+        else {
+            logger.log(`[만화] 추출 중: ${item.title}`, 'Downloader');
 
-            const chapterMatch = chapterTitleOnly.match(/(\d+)화/);
-            const chapterNum = chapterMatch ? chapterMatch[1].padStart(4, '0') : item.num;
-            const cleanChapterTitle = `${chapterNum} ${chapterTitleOnly}`;
+            const success = await fetchComicImages(item.src, {
+                viewerCfg: viewerCfg,
+                seriesTitle: seriesTitle,
+                rootFolder: finalRootFolder,
+                queueId: id,
+                episodeTitle: item.title,
+                episodeNum: item.num,
+                folderId: item.folderId || config.folderId || '',
+                destination: destination,
+                matchedRule: parser.rule,
+                protocolDomain: parser.protocolDomain,
+                scanSpeedMultiplier: config.scanSpeed,
+                localNameTemplate: config.localNameTemplate,
+                localEpisodePadding: config.localEpisodePadding
+            });
 
-            builder.addChapter(cleanChapterTitle, resolvedImages);
-            logger.log(`✅ 추출 및 다운로드 성공: ${item.title} (이미지 ${resolvedImages.length}개)`, 'Downloader');
-        } else {
-            throw new Error(`추출 실패 (이미지 팝업 패키지 획득 불가)`);
+            if (success) {
+                logger.log(`✅ [자립형 워커] 만화 수집 및 드라이브/로컬 저장 성공: ${item.title}`, 'Downloader');
+                await sleep(policy.min, policy.max);
+                return true; // Self-contained completed
+            } else {
+                throw new Error(`추출 실패 (만화 팝업 수집 실패)`);
+            }
         }
-
-        // [속도] 만화는 fetchComicImages 내부 WAF 지터가 이미 회차 간격을 벌리므로
-        // 여기서의 중복 sleep 제거 (이중 대기 방지)
+    } finally {
+        // 단일/로컬 워커 수집 완료/실패 후 대기열 임시 아이템 클린업
+        removeQueueItem(id);
     }
 }
 
@@ -137,7 +136,7 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
     const logger = LogBox.getInstance();
     logger.init();
     logger.show();
-    logger.log(`다운로드 시작 (정책: ${policy}, 강제 덮어쓰기: ${forceOverwrite})...`);
+    logger.info(`다운로드 시작 (정책: ${policy}, 강제 덮어쓰기: ${forceOverwrite})...`);
 
     // Auto-start Anti-Sleep mode
     try {
@@ -151,14 +150,14 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
     const partialFailures = []; // [v1.8.1] 부분 실패 리스트 (이미지 일부 누락)
     const siteInfo = await detectSite();
     if (!siteInfo) {
-        tokiAlert("지원하지 않는 사이트이거나 다운로드 페이지가 아닙니다.");
+        alert("지원하지 않는 사이트이거나 다운로드 페이지가 아닙니다.");
         stopSilentAudio();
         return;
     }
 
     const parser = await ParserFactory.getParser();
     if (!parser) {
-        tokiAlert("파서를 초기화할 수 없습니다.");
+        alert("파서를 초기화할 수 없습니다.");
         stopSilentAudio();
         return;
     }
@@ -201,16 +200,8 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
 
         // [v1.8.2] Graceful Fallback for missing Drive configuration
         if (destination === 'drive' && !isConfigValid()) {
-            tokiAlert('구글 드라이브 설정(Folder ID 등)이 누락되었습니다. 임시로 개별 로컬 다운로드 정책으로 전환합니다.');
+            alert('구글 드라이브 설정(Folder ID 등)이 누락되었습니다. 임시로 개별 로컬 다운로드 정책으로 전환합니다.');
             logger.warn('⚠️ 구글 드라이브 설정 누락 감지. 정책을 개별 로컬 다운로드로 자동 전환합니다.', 'System');
-            buildingPolicy = 'individual';
-            destination = 'local';
-        }
-
-        // [WebDAV] Graceful Fallback for missing NAS WebDAV configuration
-        if (destination === 'native' && !isWebDavConfigValid()) {
-            tokiAlert('NAS WebDAV URL이 설정되지 않았습니다. 임시로 개별 로컬 다운로드 정책으로 전환합니다.');
-            logger.warn('⚠️ WebDAV 설정 누락 감지. 정책을 개별 로컬 다운로드로 자동 전환합니다.', 'System');
             buildingPolicy = 'individual';
             destination = 'local';
         }
@@ -258,14 +249,14 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
         if (list.length > 0) {
             const first = parser.parseListItem(list[list.length - 1]); // usually reversed order
             const last = parser.parseListItem(list[0]);
-            logger.log(`총 ${list.length}개 항목 처리 예정. (${first.title} ~ ${last.title})`, 'Downloader');
+            logger.info(`총 ${list.length}개 항목 처리 예정. (${first.title} ~ ${last.title})`, 'Downloader');
         } else {
             logger.log(`총 0개 항목 처리 예정.`, 'Downloader');
         }
 
         if (list.length === 0) {
             logger.warn('에피소드 목록이 0개입니다. 사이트 구조가 달라졌거나 올바른 목록 페이지인지 확인하세요.', 'Downloader');
-            tokiAlert("다운로드할 항목이 없습니다.");
+            alert("다운로드할 항목이 없습니다.");
             return;
         }
 
@@ -298,18 +289,18 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
             // We'll append batch info later
         }
 
-        // [v1.4.0] Upload Series Thumbnail (Drive: _Thumbnails 리다이렉트 / native: 시리즈 폴더에 cover.jpg → Kavita 표지)
-        if (destination === 'drive' || destination === 'native') {
+        // [v1.4.0] Upload Series Thumbnail (if uploading to Drive)
+        if (destination === 'drive') {
             try {
                 const thumbnailUrl = parser.getThumbnailUrl();
                 if (thumbnailUrl) {
                     logger.log('📷 시리즈 썸네일 업로드 중...');
                     const thumbBlob = await fetchBlobWithXHR(thumbnailUrl);
-
-                    // Upload as 'cover.jpg'
-                    // - drive: network.js가 _Thumbnails/{ID}.jpg로 자동 리다이렉트
-                    // - native: WebDAV 시리즈 폴더에 cover.jpg로 저장 (Kavita 표지 자동 인식)
-                    await saveFile(thumbBlob, 'cover', destination, 'jpg', {
+                    
+                    // Upload as 'cover.jpg' - network.js will auto-redirect to _Thumbnails/{ID}.jpg
+                    // saveFile(data, filename, type, extension, metadata)
+                    // → fullFileName = "cover.jpg"
+                    await saveFile(thumbBlob, 'cover', 'drive', 'jpg', { 
                         category,
                         folderName: rootFolder  // Target folder for upload
                     });
@@ -330,29 +321,6 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
         let historyCheckTimeoutFlag = false;
         let historyFolderId = null;
 
-        // [WebDAV] NAS 업로드 기록 사전 조회 (Smart Skip) — PROPFIND 기반
-        if (destination === 'native') {
-            try {
-                if (forceOverwrite) {
-                    logger.log('⚠️ 강제 재다운로드 옵션 활성화: 기존 NAS 기록 무시 (전체 덮어쓰기)');
-                } else {
-                    logger.log('🗂️ NAS WebDAV 업로드 기록 및 용량 확인 중 (Smart Skip)...');
-                    const histResult = await fetchHistoryWebDav(rootFolder, category);
-                    if (histResult.success) {
-                        histResult.data.forEach(id => {
-                            uploadedHistorySet.add(id.toString());
-                            uploadedHistorySet.add(parseInt(id).toString());
-                        });
-                        if (uploadedHistorySet.size > 0) {
-                            logger.log(`⏭️ 기존 NAS 업로드 에피소드 ${histResult.data.length}개 감지 — 건너뜁니다.`);
-                        }
-                    }
-                }
-            } catch (histErr) {
-                logger.log(`⚠️ NAS 업로드 기록 조회 실패(전체 업로드 진행): ${histErr.message}`, 'warn');
-            }
-        }
-
         if (destination === 'drive') {
             try {
                 if (forceOverwrite) {
@@ -362,6 +330,7 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
                     const histResult = await fetchHistoryDirect(rootFolder, category);
                     
                     if (histResult.success) {
+                        historyFolderId = histResult.folderId;
                         // Normalize: accept padded ("0001") and plain ("1") forms
                         histResult.data.forEach(id => {
                             const plain = parseInt(id).toString();
@@ -448,11 +417,128 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
             }
         }
 
+        // [v1.21.2] 공통 범용 큐 선등록 래퍼 (Universal Queue Pre-Registration)
+        // 어떤 다운로드 정책이 들어와도 루프 시작 전 전체 수집 대상 에피소드 목록을 큐에 선등록
+        const currentNovelMode = getConfig().novelMode;
+        const currentIsSingleVolume = isNovel && currentNovelMode === 'singleVolume';
+        
+        const pendingEpisodes = [];
+        for (let i = 0; i < list.length; i++) {
+            const item = parser.parseListItem(list[i].element || list[i]);
+            const numStr = item.num ? item.num.toString() : '';
+            const numPlain = parseInt(numStr).toString();
+            
+            // 구글 드라이브 스킵 필터 (드라이브 전용)
+            if (destination === 'drive' && !currentIsSingleVolume) {
+                if (uploadedHistorySet.size > 0 && (uploadedHistorySet.has(numStr) || uploadedHistorySet.has(numPlain))) {
+                    continue;
+                }
+                
+                if (historyCheckTimeoutFlag && historyFolderId) {
+                    const isUploaded = await checkSingleHistoryDirect(historyFolderId, numStr);
+                    if (isUploaded) continue;
+                }
+            }
+            
+            pendingEpisodes.push({
+                title: item.title,
+                url: item.src || item.url || (list[i].element || list[i]).href || location.href,
+                episodeNum: numStr,
+                category: category,
+                viewerCfg: parser.rule.viewer || {},
+                rootFolder: rootFolder,
+                destination: destination,
+                novelFormat: configNovelFormat,
+                matchedRule: parser.rule,
+                protocolDomain: parser.protocolDomain || window.location.origin
+            });
+        }
+
+        if (pendingEpisodes.length === 0) {
+            if (destination === 'drive' && !currentIsSingleVolume) {
+                logger.success('✅ 모든 에피소드가 이미 드라이브에 존재하여 수집을 조기 완료합니다.', 'Queue');
+                stopSilentAudio();
+                return;
+            }
+        } else {
+            // [v1.21.4] 구글 드라이브 업로드 모드 시, 큐 등록 전 작품 폴더를 선제 생성/확정하여 큐 전파 (경쟁적 중복 폴더 생성 차단)
+            let activeFolderId = historyFolderId;
+            if (destination === 'drive' && !activeFolderId) {
+                logger.log(`📁 [Drive] 신규 작품 폴더 선제 생성 중: ${seriesTitle}`);
+                try {
+                    const token = await getOAuthToken();
+                    activeFolderId = await getOrCreateFolder(seriesTitle, getConfig().folderId, token, category);
+                    logger.success(`📁 [Drive] 신규 작품 폴더 선제 생성 완료 -> ID: ${activeFolderId}`);
+                } catch (folderErr) {
+                    logger.error(`❌ [Drive] 폴더 선제 생성 중 에러 발생: ${folderErr.message}`);
+                }
+            }
+
+            // 모든 pendingEpisodes에 확정된 폴더 ID 주입
+            const mappedEpisodes = pendingEpisodes.map(ep => ({
+                ...ep,
+                folderId: activeFolderId || ''
+            }));
+
+            const injected = addEpisodesToQueue(mappedEpisodes, seriesTitle);
+            logger.log(`🗂️ [공통 큐] 수집 대상 ${injected}개 에피소드를 대기열에 선등록 완료.`, 'Queue');
+        }
+
+        // [v1.21.0] 차세대 자율형 멀티큐 배치 수집기 기동 가교 (구글 드라이브 업로드 전용 비동기 스케줄러 라우팅)
+        if (destination === 'drive' && !currentIsSingleVolume) {
+            logger.log(`🚦 [멀티큐] 차세대 자율형 멀티큐 배치 수집기(v1.21.0) 가동 준비...`, 'Queue');
+
+            // 팝업 차단 회피용 동기적 자식 창 사전 오픈 (Pre-open)
+            const MAX_CONCURRENCY = 2;
+            const openCount = Math.min(MAX_CONCURRENCY, pendingEpisodes.length);
+            logger.log(`🛡️ 팝업 차단 필터 우회를 위한 자식 창 ${openCount}개 선제 확보(Pre-open) 중...`, 'Queue');
+
+            const width = 400;
+            const height = 600;
+            const leftBase = window.screen.width - width - 50;
+            const topBase = 100;
+
+            const freshlyOpened = [];
+            for (let i = 0; i < openCount; i++) {
+                const ep = pendingEpisodes[i];
+                const id = getQueueItemId(seriesTitle, ep.episodeNum);
+                const left = leftBase - (i * 50);
+                const top = topBase + (i * 50);
+                const workerName = `tokisync_novel_worker_${id}`.replace(/[^a-zA-Z0-9_]/g, '');
+
+                logger.log(`🚀 [Pre-open #${i + 1}] 자식 팝업 창 생성: ${ep.title}`);
+                const popupRef = window.open(
+                    ep.url,
+                    workerName,
+                    `width=${width},height=${height},left=${left},top=${top},noopener=false,scrollbars=yes,resizable=yes`
+                );
+
+                if (popupRef) {
+                    activeWorkers.set(id, popupRef);
+                    updateQueueItem(id, { status: 'processing', stage: WORKER_STAGE.INIT });
+                    freshlyOpened.push(id);
+                } else {
+                    logger.error(`❌ [Pre-open #${i + 1}] 브라우저 차단으로 자식 창 확보에 실패하였습니다.`, 'Queue');
+                }
+            }
+
+            if (freshlyOpened.length > 0) {
+                logger.success(`🚦 멀티큐 스케줄러 기동 완료. 릴레이 루프 활성화.`, 'Queue');
+                initBatchWorkerController();
+                initQueueScheduler();
+            } else {
+                logger.error(`❌ 선제 확보된 자식 창이 없어 큐 수집을 중지합니다.`, 'Queue');
+                stopSilentAudio();
+            }
+
+            return; // 큐 엔진에 스케줄 위임 후 early exit
+        }
+
         // Create IFrame
         // 목록 페이지 최하단에 배치 + opacity 0.1
         // IntersectionObserver가 정상 동작하며, 브라우저가 일반 문서 흐름으로 렌더링
         const iframe = document.createElement('iframe');
-        iframe.classList.add('dsx-visible-block', 'dsx-downloader-iframe');
+        iframe.classList.add('toki-visible-block', 'toki-downloader-iframe');
         document.body.appendChild(iframe);
 
         // [v1.7.1] Novel Single Volume Mode Init
@@ -467,49 +553,23 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
         }
 
         // --- Processing Loop ---
-        // [custom] CFG_CONCURRENCY 옵션 — 사용자가 설정한 동시 처리 수.
-        // [pipeline] 다운로드는 순차 유지, 업로드만 병렬(bounded). getConcurrency()=동시 업로드 수.
-        // 1이어도 "다음 회차 다운로드 ↔ 현재 회차 업로드" 1-depth 파이프라인으로 겹쳐 처리.
-        // 2+면 업로드 N개까지 동시 진행. 다운로드 요청은 절대 병렬화하지 않음(소스 사이트 밴 방지).
-        const uploadConcurrency = getConcurrency();
-        const inflightUploads = new Set();
-        const uploadFailures = [];
-        if (uploadConcurrency > 1) {
-            logger.log(`⚙️ 업로드 파이프라인: 동시 업로드 ${uploadConcurrency}개 (다운로드는 순차 유지)`, 'Downloader:Pipeline');
-        }
-        const scheduleUpload = async (taskFn, label) => {
-            // 풀이 가득 차면 하나 끝날 때까지만 대기 → 그 사이 다운로드 루프는 계속 진행
-            while (inflightUploads.size >= uploadConcurrency) {
-                await Promise.race(inflightUploads);
-            }
-            const p = (async () => {
-                try {
-                    await taskFn();
-                } catch (e) {
-                    uploadFailures.push({ label, error: e.message });
-                    logger.error(`[Upload] 실패 (${label}): ${e.message}`, 'Downloader:Upload');
-                }
-            })();
-            inflightUploads.add(p);
-            p.finally(() => inflightUploads.delete(p));
-        };
         for (let i = 0; i < list.length; i++) {
             const item = parser.parseListItem(list[i].element || list[i]); 
             console.clear();
-            logger.log(`[${i + 1}/${list.length}] 처리 중: ${item.title}`);
+            logger.info(`[${i + 1}/${list.length}] 처리 중: ${item.title}`);
 
             // [v1.5.0 Smart Skip] Skip already-uploaded episodes (Drive policy only)
             // [v1.7.1] Bypass skipping in Single Volume mode (we need all chapters)
-            if (!isSingleVolume && (destination === 'drive' || destination === 'native')) {
+            if (!isSingleVolume && destination === 'drive') {
                 const numStr = item.num ? item.num.toString() : '';
                 const numPlain = parseInt(numStr).toString();
                 if (uploadedHistorySet.size > 0 && (uploadedHistorySet.has(numStr) || uploadedHistorySet.has(numPlain))) {
                     logger.log(`⏭️ 건너뜀 (이미 업로드됨): ${item.title}`);
                     continue;
                 }
-
-                // [v1.7.4] 페일세이프: 타임아웃 발생 시 개별 단위 핀셋 조회 수행 (Drive 전용)
-                if (destination === 'drive' && historyCheckTimeoutFlag && historyFolderId) {
+                
+                // [v1.7.4] 페일세이프: 타임아웃 발생 시 개별 단위 핀셋 조회 수행
+                if (historyCheckTimeoutFlag && historyFolderId) {
                     logger.log(`🔍 [페일세이프] 타임아웃 2차 단일 로컬/원격 검사 중: ${item.title}`);
                     const isUploaded = await checkSingleHistoryDirect(historyFolderId, numStr);
                     if (isUploaded) {
@@ -532,11 +592,12 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
             }
 
             // Process Item
+            let selfContained = false;
             try {
-                const result = await processItem(item, currentBuilder, siteInfo, iframe, parser, seriesTitle);
+                selfContained = await processItem(item, currentBuilder, siteInfo, iframe, parser, seriesTitle, null, rootFolder);
                 
-                // [v1.8.1] 부분 실패 체크 (이미지 누락 여부)
-                if (currentBuilder && currentBuilder.chapters) {
+                // [v1.8.1] 부분 실패 체크 (이미지 누락 여부) - 자립형 워커가 아닌 로컬 빌더 구동 시에만 처리
+                if (!selfContained && currentBuilder && currentBuilder.chapters) {
                     const latestChapter = currentBuilder.chapters[currentBuilder.chapters.length - 1];
                     if (latestChapter && Array.isArray(latestChapter.images)) {
                         const missingCount = latestChapter.images.filter(img => img.isMissing).length;
@@ -551,7 +612,7 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
                     }
                 }
 
-                if (isSingleVolume) {
+                if (!selfContained && isSingleVolume) {
                     const currentSize = currentBuilder.chapters ? currentBuilder.chapters.length : (currentBuilder.content ? currentBuilder.content.split('===').length - 1 : 0);
                     logger.log(`📥 챕터 추가 완료: ${item.title} (현재 ${currentSize}개)`, 'Downloader');
                 }
@@ -567,6 +628,11 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
                     error: errorMsg
                 });
                 continue; // Skip faulty item but continue loop
+            }
+
+            // 만약 자식 워커가 업로드/저장까지 자체 종결했다면, 부모 창의 개별 파일 빌딩/저장 흐름을 완전히 건너뛴다.
+            if (selfContained) {
+                continue;
             }
 
             // Post-Process for Non-Default Policies
@@ -597,23 +663,33 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
                 }
                 */
 
-                // Final Filename: "0001 - Title"
-                const fullFilename = `${item.num} - ${chapterTitle}`;
+                // Final Filename: Dynamic based on Template or Drive fallback
+                let fullFilename;
+                if (destination !== 'drive') {
+                    const paddingVal = parseInt(config.localEpisodePadding, 10);
+                    const paddedNum = paddingVal > 0 
+                        ? (item.num || '').toString().padStart(paddingVal, '0') 
+                        : (item.num || '').toString();
+
+                    const template = config.localNameTemplate || "{number} - {title}";
+                    fullFilename = template
+                        .replace(/{number}/g, paddedNum)
+                        .replace(/{rawNumber}/g, (item.num || '').toString())
+                        .replace(/{series}/g, seriesTitle || rootFolder || '')
+                        .replace(/{title}/g, chapterTitle || '');
+                } else {
+                    const paddedNum = (item.num || '').toString().padStart(4, '0');
+                    fullFilename = `${paddedNum} - ${chapterTitle}`;
+                }
 
                 // [v1.6.0] Kavita Metadata Insertion
-                // [fix] writer/author = 추출한 실제 작가 (없으면 사이트명 폴백). summary도 전달.
-                const innerZip = await currentBuilder.build({
+                const innerZip = await currentBuilder.build({ 
                     series: seriesTitle || rootFolder,
                     title: chapterTitle,
                     number: item.num,
-                    writer: seriesMetadata.author || siteName,
-                    author: seriesMetadata.author || siteName,
-                    summary: seriesMetadata.summary || "",
-                    status: seriesMetadata.status || "",
-                    tags: seriesMetadata.tags || [],
-                    category: category
+                    writer: siteName
                 });
-                const blob = await innerZip.generateAsync({ type: "blob", compression: getCbzCompression() });
+                const blob = await innerZip.generateAsync({ type: "blob" });
 
                 if (buildingPolicy === 'zipOfCbzs') {
                     console.log(`[MasterZip] 추가 중: ${fullFilename}.${extension}`);
@@ -629,75 +705,72 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
                         const batchNum = Math.ceil(processedCount / BATCH_SIZE);
                         const batchFilename = `${rootFolder}_Part${batchNum}`;
                         
-                        logger.log(`📦 배치 저장 중... (${batchFilename})`);
+                        logger.info(`📦 배치 저장 중... (${batchFilename})`);
                         await saveFile(masterZip, batchFilename, 'local', 'zip', { category });
                         
                         // Clear masterZip for next batch to save memory
                         masterZip = new JSZip();
                     }
                 } else if (buildingPolicy === 'individual') {
-                    // [pipeline] 업로드를 풀에 스케줄 → 다음 회차 다운로드와 겹쳐 진행
-                    const cachedFileId = episodeCacheMap.get(fullFilename);
-                    const uploadTask = async () => {
                     // [v1.6.0] Phase B-3: Fast Path Smart Branching
                     let success = false;
+                    const cachedFileId = episodeCacheMap.get(fullFilename);
 
                     if (destination === 'drive' && cachedFileId) {
                         try {
-                            logger.log(`⚡ [Fast Path] 캐시 히트! Direct PATCH 진행 -> ID: ${cachedFileId} (${(blob.size/1024/1024).toFixed(1)}MB)`);
+                            logger.log(`⚡ [Fast Path] 캐시 히트! 무탐색 덮어쓰기 (PUT) 진행 -> ID: ${cachedFileId}`);
+                            
+                            // 1. Init Update Session
+                            // Notice: We do NOT use direct upload here because direct upload deletes existing files.
+                            // We MUST use GAS Relay to trigger the specific PATCH/PUT resumable session.
+                            const updateUrl = await initUpdateUploadViaGASRelay(cachedFileId, `${fullFilename}.${extension}`);
+                            
+                            // 2. Transmit chunks (re-use standard GM_xmlHttpRequest logic from gas.js)
+                            // We can build a quick uploader here or expose a method. Since gas.js encapsulates it tightly,
+                            // we inline the chunk upload for the Fast Path for maximum control:
+                            const CHUNK_SIZE = 20 * 1024 * 1024;
+                            const totalSize = blob.size;
+                            let start = 0;
+                            const buffer = await blob.arrayBuffer();
+                            
+                            while (start < totalSize) {
+                                const end = Math.min(start + CHUNK_SIZE, totalSize);
+                                const chunkBuffer = buffer.slice(start, end);
+                                const bytes = new Uint8Array(chunkBuffer);
+                                
+                                // High-speed Base64 encode
+                                let binary = "";
+                                const chunk_size = 0x8000; // 32KB
+                                for (let j = 0; j < bytes.length; j += chunk_size) {
+                                    binary += String.fromCharCode.apply(null, bytes.subarray(j, j + chunk_size));
+                                }
+                                const chunkBase64 = window.btoa(binary);
 
-                            // [custom] Drive PATCH 직행 — GAS Relay + Base64 우회
-                            // <=30MB single PATCH, >30MB resumable PATCH
-                            try {
-                                await updateDirect(cachedFileId, blob, `${fullFilename}.${extension}`);
-                                logger.success(`⚡ [Fast Path] ${fullFilename} Direct PATCH 완료!`, 'FastPath');
-                                success = true;
-                            } catch (directErr) {
-                                // Direct 실패 시 GAS Relay 폴백 (안전망)
-                                logger.warn(`⚠️ [Fast Path] Direct PATCH 실패 (${directErr.message}) → GAS Relay 폴백`, 'FastPath');
-                                const updateUrl = await initUpdateUploadViaGASRelay(cachedFileId, `${fullFilename}.${extension}`);
-                                const CHUNK_SIZE = 20 * 1024 * 1024;
-                                const totalSize = blob.size;
-                                let start = 0;
-                                const buffer = await blob.arrayBuffer();
-
-                                while (start < totalSize) {
-                                    const end = Math.min(start + CHUNK_SIZE, totalSize);
-                                    const chunkBuffer = buffer.slice(start, end);
-                                    const bytes = new Uint8Array(chunkBuffer);
-
-                                    let binary = "";
-                                    const chunk_size = 0x8000;
-                                    for (let j = 0; j < bytes.length; j += chunk_size) {
-                                        binary += String.fromCharCode.apply(null, bytes.subarray(j, j + chunk_size));
-                                    }
-                                    const chunkBase64 = window.btoa(binary);
-
-                                    await new Promise((res, rej) => {
-                                        GM_xmlhttpRequest({
-                                            method: "POST", url: getConfig().gasUrl,
-                                            data: JSON.stringify({
-                                                type: "upload", uploadUrl: updateUrl, chunkData: chunkBase64,
+                                await new Promise((res, rej) => {
+                                    GM_xmlhttpRequest({
+                                        method: "POST", url: getConfig().gasUrl,
+                                            data: JSON.stringify({ 
+                                                type: "upload", uploadUrl: updateUrl, chunkData: chunkBase64, 
                                                 folderId: getConfig().folderId,
                                                 protocolVersion: 3,
                                                 start: start, end: end, total: totalSize, apiKey: getConfig().apiKey
                                             }),
-                                            headers: { "Content-Type": "text/plain" },
-                                            timeout: 300000,
-                                            onload: (resp) => {
-                                                try {
-                                                    const json = JSON.parse(resp.responseText);
-                                                    if (json.status === 'success') res(); else rej(new Error("Fail"));
-                                                } catch (e) { rej(e); }
-                                            },
-                                            onerror: rej
-                                        });
+                                        headers: { "Content-Type": "text/plain" },
+                                        timeout: 300000,
+                                        onload: (resp) => {
+                                            try { 
+                                                const json = JSON.parse(resp.responseText); 
+                                                if (json.status === 'success') res(); else rej(new Error("Fail")); 
+                                            } catch (e) { rej(e); }
+                                        },
+                                        onerror: rej
                                     });
-                                    start = end;
-                                }
-                                logger.success(`⚡ [Fast Path] ${fullFilename} GAS Relay 폴백 완료`, 'FastPath');
-                                success = true;
+                                });
+                                start = end;
                             }
+                            
+                            logger.success(`⚡ [Fast Path] ${fullFilename} 업데이트(PUT) 완료!`, 'FastPath');
+                            success = true;
                         } catch (fastPathErr) {
                             const errMsg = fastPathErr.message || "";
                             logger.log(`⚠️ Fast Path 업로드 중 에러 발생 (${errMsg}), Fallback 시작...`, 'warn', 'FastPath');
@@ -721,17 +794,15 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
                             category: category
                         });
                     }
-                    }; // end uploadTask
-                    await scheduleUpload(uploadTask, fullFilename);
                 }
             }
             
             // [v1.4.0] Add completion badge to list item (real-time feedback)
-            if (item.element && !item.element.querySelector('.dsx-badge')) {
+            if (item.element && !item.element.querySelector('.toki-badge')) {
                 const badge = document.createElement('span');
-                badge.className = 'dsx-badge';
+                badge.className = 'toki-badge';
                 badge.innerText = '✅';
-                // Styles moved to .dsx-badge in ui.css
+                // Styles moved to .toki-badge in ui.css
                 
                 // Target: .wr-subject > a (link element)
                 const linkEl = item.element.querySelector('.wr-subject > a');
@@ -748,18 +819,8 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
                 }
                 
                 // Visual feedback (v1.9.5 consistent styling)
-                item.element.classList.add('dsx-downloaded');
+                item.element.classList.add('toki-downloaded');
             }
-        }
-
-        // [pipeline] 루프 종료 후 남은 업로드 모두 완료 대기
-        if (inflightUploads.size > 0) {
-            logger.log(`⏳ 남은 업로드 ${inflightUploads.size}개 완료 대기 중...`, 'Downloader:Pipeline');
-            await Promise.all(inflightUploads);
-        }
-        if (uploadFailures.length > 0) {
-            const labels = uploadFailures.slice(0, 3).map(f => f.label).join(', ');
-            logger.warn(`⚠️ 업로드 실패 ${uploadFailures.length}개: ${labels}${uploadFailures.length > 3 ? ' 외' : ''}`, 'Downloader:Upload');
         }
 
 
@@ -784,19 +845,14 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
                     }
                     const finalFilename = `${seriesTitle || rootFolder} (${rangeLabel})`;
                     
-                    logger.log(`📚 단행본 조립 및 저장 중... (${finalFilename})`);
+                    logger.info(`📚 단행본 조립 및 저장 중... (${finalFilename})`);
                     
                     const finalZip = await masterNovelBuilder.build({
                         series: seriesTitle || rootFolder,
                         title: seriesTitle || rootFolder,
-                        writer: seriesMetadata.author || siteName,
-                        author: seriesMetadata.author || siteName,
-                        summary: seriesMetadata.summary || "",
-                        status: seriesMetadata.status || "",
-                        tags: seriesMetadata.tags || [],
-                        category: category
+                        writer: siteName
                     });
-                    const finalBlob = await finalZip.generateAsync({ type: "blob", compression: getCbzCompression() });
+                    const finalBlob = await finalZip.generateAsync({ type: "blob" });
                     
                     await saveFile(finalBlob, finalFilename, destination, extension, {
                         folderName: rootFolder,
@@ -836,7 +892,7 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
     } catch (error) {
         console.error(error);
         logger.error(`전체 다운로드 루틴 오류 발생: ${error.message}`, 'System');
-        tokiAlert(`다운로드 중 오류 발생:\n${error.message}`);
+        alert(`다운로드 중 오류 발생:\n${error.message}`);
     } finally {
         // Auto-stop Anti-Sleep mode
         stopSilentAudio();
@@ -844,7 +900,7 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
         
         // [Cleanup 팝업 세션] 다운로드 종료 후 액티브 팝업 폐쇄
         try {
-            closeActivePopup();
+            closeActiveWorker();
         } catch (popupErr) {
             console.warn('[Downloader] 팝업 클린업 실패:', popupErr);
         }
@@ -855,94 +911,7 @@ export async function tokiDownload(rangeSpec, policy = 'zipOfCbzs', forceOverwri
     }
 }
 
-async function fetchImages(imageUrls) {
-    const logger = LogBox.getInstance();
-    const promises = imageUrls.map(async (src) => {
-        let retries = 3;
-        let lastBlob = null;
-        let lastExt = '.jpg';
-        
-        while (retries > 0) {
-            try {
-                const blob = await fetchBlobWithXHR(src);
-                
-                if (blob.size === 0) {
-                    throw new Error("빈 이미지 데이터 (Blob size 0)");
-                }
 
-                // Metadata Extraction
-                let ext = '.jpg';
-                const extMatch = src.match(/\.[a-zA-Z]+$/);
-                
-                if (extMatch) {
-                    ext = extMatch[0];
-                } else {
-                    // Fallback: Infer from Content-Type
-                    const type = response.headers.get('content-type');
-                    if (type) {
-                        if (type.includes('png')) ext = '.png';
-                        else if (type.includes('gif')) ext = '.gif';
-                        else if (type.includes('webp')) ext = '.webp';
-                        else if (type.includes('jpeg') || type.includes('jpg')) ext = '.jpg';
-                    }
-                }
-
-                lastBlob = blob;
-                lastExt = ext;
-
-                // [v1.7.3] Hybrid Dummy Detection: Size + Resolution
-                // 100KB 이하일 경우 Dummy일 확률이 있으나, 해상도가 높으면 정상으로 수용
-                if (blob.size < 100 * 1024 && retries > 1) {
-                    // 1. 확실한 더미 패턴 URL이면 재시도 없이 즉시 실패 처리
-                    const isDummyUrl = (u) => u && (u.includes('blank.gif') || u.includes('loading.gif') || u.includes('pixel.gif'));
-                    if (isDummyUrl(src)) {
-                        retries = 1; 
-                        throw new Error(`더미 이미지 URL 확인됨 (Skip retry)`);
-                    }
-
-                    // 2. 해상도 체크 (가로 또는 세로가 300px 이상이면 정상 이미지로 간주)
-                    const { getImageDimensions } = await import('./utils.js');
-                    const { width, height } = await getImageDimensions(blob);
-                    
-                    if (width > 300 || height > 300) {
-                        // 규격이 정상인 경우 용량에 상관없이 수용
-                        return { src, blob, ext };
-                    }
-
-                    throw new Error(`저용량 및 저해상도 의심 (${(blob.size/1024).toFixed(1)}KB, ${width}x${height}) - Lazy 더미 이미지일 수 있으므로 재시도`);
-                }
-
-                return { src, blob, ext };
-            } catch (e) {
-                retries--;
-                const retryCount = 3 - retries;
-                if (retries > 0) logger.warn(`이미지 다운로드 재시도 (${retryCount}/3): ${e.message}`, 'Network:Image');
-                
-                if (retries === 0) {
-                    // 3회 모두 실패했고 lastBlob이 존재하지만, 여전히 dummy 성격이면 거절
-                    if (lastBlob && lastBlob.size > 10000) { // 10KB 이상일 때만 보수적 수용
-                        logger.log(`⚠️ 용량이 작지만 수용 (${(lastBlob.size/1024).toFixed(1)}KB): ${src.split('/').pop()}`, 'Network:Image');
-                        return { src, blob: lastBlob, ext: lastExt };
-                    }
-                    
-                    console.error(`이미지 다운로드 최종 실패 (${src}):`, e);
-                    logger.error(`⚠️ 이미지 누락: ${src.split('/').pop()} (3회 재시도 실패)`, 'Network:Image');
-                    
-                    // [Fix] 다운로드 실패 시 null 반환 대신 안내 페이지 삽입
-                    const placeholderText = `[PAGE_MISSING]\n\n해당 웹툰 페이지를 다운로드할 수 없었습니다.\n원인: 서버 제한 또는 백그라운드 스로틀링 (Lazy Load 실패)\n\nURL: ${src}`;
-                    const placeholderBlob = new Blob([placeholderText], { type: 'text/plain' });
-                    
-                    return { src, blob: placeholderBlob, ext: '.txt', isMissing: true };
-                }
-                
-                // 재시도 대기 (v1.7.2: 1.5초 -> 0.5초)
-                await new Promise((resolve) => setTimeout(resolve, 500));
-            }
-        }
-    });
-
-    return await Promise.all(promises);
-}
 
 /**
  * [v1.8.1] 다운로드 실패 리포트 생성 및 다운로드 (MCP 검토 의견 반영)

@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.21.5] - 2026-06-01
+
+### 🛠️ 템퍼몽키 런타임 검증 에러 및 팝업창 confirm 격리 차단 해소
+- **TM Header 규격 준수 (`@match` ➡️ `@include` 전환)**: 포트 번호가 들어가는 로컬 호스트 테스트용 주소(`http://localhost:*/*` 및 `http://127.0.0.1:*/*`)가 정식 Match Pattern 규격을 위반해 템퍼몽키에서 "유효하지 않은 유저스크립트" 에러로 거부되던 현상을 우회 해결하기 위해 유연한 `@include`로 전환했습니다.
+- **팝업창 격리 보안 우회 (`confirm` ➡️ `popupWindow.confirm` 전환)**: 독립된 자식 대시보드 팝업창에서 confirm 다이얼로그 호출 시 브라우저가 포커스 불일치 및 크로스 윈도우 통제에 의해 다이얼로그 창을 침묵 차단(Silent Rejection)하던 보안 제약을 우회하기 위해, 이벤트 위임 내 모든 confirm 호출의 창 객체를 명시적 바인딩으로 수정했습니다.
+
+## [v1.21.3] - 2026-05-29
+
+### 🛠️ 리팩토링 검증 오류 수정 및 레거시 파서/워커 코드 제거
+- **`activeWorkers` 타입 정합성 복구**: `downloader.js` L506의 `activeWorkers.set(id, { ref, closedCount })`를 윈도우 객체 자체인 `activeWorkers.set(id, popupRef)`로 저장하도록 교정하여, 타 모듈에서 TypeError로 인해 수집기 및 Liveness Check가 마비되던 치명적인 논리 결함을 해결했습니다.
+- **`index.js` ReferenceError 해결**: `index.js` L4에서 `updateQueueItemProgress` 임포트 누락으로 인해 에피소드 진행률 통제 시 ReferenceError가 발생하던 문제를 임포트 목록 추가로 바로잡았습니다.
+- **사문화된 `fetchImages` 함수 제거**: `downloader.js` 내부에서 더 이상 호출되지 않던 구형 `fetchImages` 함수를 제거하여, `response` 변수 부재로 인한 잠재적 런타임 오류 가능성을 제거하고 리소스를 슬림화했습니다.
+- **레거시 자식 워커 및 IPC 메시지 수신기 전격 제거**: `index.js` 내에 잔존하여 새 IPC 브로커와 이중 충돌 및 데드락을 유발하던 레거시 `isWorkerPopup` 블록(460줄 규모)과 부모 측의 구형 `message` 이벤트 리스너를 완전히 청소했습니다.
+- **자립형 워커 엔진 `initWorkerExtractor` 연동**: 자식 팝업 기동 시 신규 자립형 워커인 `initWorkerExtractor()`를 즉시 호출하고 Early Return 하도록 `index.js` 구조를 정밀히 리팩터링하여 완벽한 신규 IPC 프로토콜(Controller-Worker)로의 이전을 완료했습니다.
+- **종합 유효성 빌드 완료**: `npm run build:core` 실행 결과, 392 KiB 크기의 최종 유저스크립트 `tokiSync.user.js` 빌드가 100% 정상적으로 컴파일 완료됨을 확인하고 `graphify`를 통해 코드 간 지식 관계망도 최신화했습니다.
+
+## [v1.20.6] - 2026-05-28
+
+### 🔒 파싱 규칙 캐시 제거 및 사용자 제어 주권 복구 (TOKI_CUSTOM_RULES Seed 이식)
+- **강제 덮어쓰기 캐시 소멸**: 매 접속 시 백그라운드에서 원격 규칙을 다운로드하여 로컬 수정을 무자비하게 날려버리던 `TOKI_REMOTE_RULES_CACHE` 임시 스토리지 캐시 메커니즘을 완전히 제거했습니다.
+- **1회성 Seed 규칙 주입 (Bootstrap)**: 커스텀 규칙 저장소인 `TOKI_CUSTOM_RULES`가 비어있는 최초 구동 시에만 원격 기본 규칙 파일(`rules.json`)로부터 씨드 규칙을 비동기로 딱 1회만 다운로드해 와 로컬 설정으로 고정 이식하는 스마트 자가 설치 루틴을 신설했습니다.
+- **로컬 규칙 영구 영속화**: 이로써 사용자가 파싱 규칙 에디터(`TreeRuleEditor`) 및 상세 설정 화면에서 직접 파싱 규칙을 추가, 수정, 삭제하더라도 백그라운드에서 날아가는 버그를 원천 차단하고 영구 영속화된 규칙 제어 주권을 복구했습니다.
+
 ## [v1.20.5] - 2026-05-26
 
 ### 📐 팝업 수집기 50x400 극슬림(Ultra-Slim) 최적화
