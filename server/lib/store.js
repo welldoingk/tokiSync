@@ -36,6 +36,7 @@ export class Store {
             seq: 0,
             unitSeq: 0,
             expSeq: 0,
+            clearSeq: 0, // /jobs/clear 시 증가 → 클라가 heartbeat 로 감지해 로컬 큐/워커 정리
             paused: false, // true면 /lease가 빈 배열 반환(새 작업 중단), 클라는 stopQueue
             commands: [],
             units: [],
@@ -56,6 +57,7 @@ export class Store {
                     seq: Number(raw.seq) || 0,
                     unitSeq: Number(raw.unitSeq) || 0,
                     expSeq: Number(raw.expSeq) || 0,
+                    clearSeq: Number(raw.clearSeq) || 0,
                     paused: !!raw.paused,
                     commands: Array.isArray(raw.commands) ? raw.commands : [],
                     units: Array.isArray(raw.units) ? raw.units : [],
@@ -83,10 +85,10 @@ export class Store {
         try {
             mkdirSync(dirname(this.dataFile), { recursive: true });
             // report/reports(휘발성)는 제외하고 저장
-            const { seq, unitSeq, expSeq, paused, commands, units, expansions, captcha } = this.state;
+            const { seq, unitSeq, expSeq, clearSeq, paused, commands, units, expansions, captcha } = this.state;
             writeFileSync(
                 this.dataFile,
-                JSON.stringify({ seq, unitSeq, expSeq, paused, commands, units, expansions, captcha }, null, 2)
+                JSON.stringify({ seq, unitSeq, expSeq, clearSeq, paused, commands, units, expansions, captcha }, null, 2)
             );
         } catch (e) {
             console.error('[store] persist failed:', e.message);
@@ -265,8 +267,10 @@ export class Store {
     clearUnits() {
         this.state.units = [];
         this._unitKeys.clear();
+        this.state.clearSeq = (this.state.clearSeq || 0) + 1; // 클라가 로컬 큐/워커도 정리하도록 신호 증가
         this._persist();
     }
+    getClearSeq() { return this.state.clearSeq || 0; }
 
     lease(clientId, max, now, ttlMs) {
         // 정지 상태면 새 작업을 내주지 않는다(클라이언트 presence는 progress heartbeat로 유지됨).

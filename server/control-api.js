@@ -203,8 +203,8 @@ async function handleApi(req, res, url) {
         const clientId = sanitizeClientId(body.clientId);
         if (clientId) {
             store.setClientReport(clientId, body, now(), config.leaseTtlMs);
-            // heartbeat 응답: pending expand 요청 + 정지(paused) 상태 → 클라가 stopQueue.
-            return sendJson(res, 200, { ok: true, expansions: store.getExpansions(now()), paused: store.isPaused() });
+            // heartbeat 응답: pending expand 요청 + 정지(paused) + clearSeq(풀 비우기 신호) → 클라가 stopQueue/로컬 큐 정리.
+            return sendJson(res, 200, { ok: true, expansions: store.getExpansions(now()), paused: store.isPaused(), clearSeq: store.getClearSeq() });
         }
         store.setReport(body, now());
         return sendJson(res, 200, { ok: true });

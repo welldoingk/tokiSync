@@ -23,7 +23,10 @@ import {
     updateQueueItem,
     initQueueScheduler,
     setQueuePaused,
+    stopAllWorkers,
+    clearQueue,
 } from './queue.js';
+import { initBatchWorkerController } from './worker-controller.js';
 import {
     getRemoteConfig,
     CFG_REMOTE_ENABLED,
@@ -42,6 +45,7 @@ const K_DONE_EXP = 'TOKI_REMOTE_DONE_EXPANSIONS'; // 이미 처리한 expand 요
 let _timer = null;
 let _started = false;
 let _schedulerInited = false;
+let _lastClearSeq = null; // 서버 풀 비우기(/jobs/clear) 신호 추적 — 첫 연결은 동기화만, 이후 증가 감지 시 정리
 let _lastProgress = null;
 let _externalIp = '';   // 외부 IP(식별/검증용, 1회 조회 후 캐시)
 let _ipQueried = false;
@@ -454,6 +458,21 @@ async function pollLease(cfg) {
         }
     }
 
+    // ③-b clear 동기화 — 서버 풀 비우기(/jobs/clear)를 로컬 큐/워커에도 반영.
+    //    서버 clearSeq 가 증가하면(새 clear) 활성 워커 팝업을 닫고(stopAllWorkers) 로컬 큐를 완전히 비운다(clearQueue).
+    //    이게 없으면 서버 풀만 비고 클라 로컬 큐가 남아 워커가 계속 돈다.
+    const _srvClearSeq = (hbRes && Number(hbRes.clearSeq)) || 0;
+    if (_lastClearSeq === null) {
+        _lastClearSeq = _srvClearSeq; // 첫 연결: 기준값만 동기화(기존 clear 재실행 방지 — 방금 투입한 큐 보호)
+    } else if (_srvClearSeq > _lastClearSeq) {
+        _lastClearSeq = _srvClearSeq;
+        try {
+            stopAllWorkers();   // 활성 팝업 닫기 + pending/processing → failed 마킹
+            clearQueue();       // 로컬 큐 완전 비우기(failed 잔존도 제거)
+            LogBox.getInstance().log('🗑️ 서버 풀 비우기 감지 → 로컬 큐/워커 정리', 'warn', 'Remote');
+        } catch (e) {}
+    }
+
     // ④ paused 동기화 — 서버 정지 상태를 upstream 큐 일시정지(setQueuePaused)에 반영.
     //    스케줄러는 getQueuePaused() 를 보고 새 워커 기동을 보류한다. 정지면 자동 펼침도 생략.
     setQueuePaused(!!(hbRes && hbRes.paused));
@@ -505,8 +524,15 @@ export function startRemoteSync() {
     if (!cfg.enabled || !cfg.url) return;
     _started = true;
 
-    // upstream 이벤트 스케줄러 1회 init(큐 변동 → 워커 자동 기동). 중복 init 가드.
-    if (!_schedulerInited) { _schedulerInited = true; try { initQueueScheduler(); } catch (e) {} }
+    // upstream 이벤트 스케줄러 + 배치 IPC 라우터 1회 init. 중복 init 가드.
+    //   ⚠️ initBatchWorkerController 필수: 워커 READY → START_EXTRACTION 주입 라우터.
+    //   이게 없으면 lease 워커 팝업이 떠도 지시를 못 받아 멈춘다(스크롤/추출 미진행).
+    //   먼저 라우터를 켠 뒤 스케줄러(팝업 기동)를 돌려야 READY 를 놓치지 않는다.
+    if (!_schedulerInited) {
+        _schedulerInited = true;
+        try { initBatchWorkerController(); } catch (e) {}
+        try { initQueueScheduler(); } catch (e) {}
+    }
 
     window.addEventListener('toki:captcha', onCaptcha);
     window.addEventListener('toki:progress', onProgress);

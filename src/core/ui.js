@@ -295,7 +295,10 @@ export class LogBox {
         const fullMsg = `[${time}] ${prefix}${msg}`;
         
         // 1. 내부 메모리 및 브라우저 콘솔에는 모든 로그 누적 출력
-        this.logs.push({ time, type, context, msg: typeof msg === 'string' ? msg : JSON.stringify(msg) });
+        //    seq: 단조 증가 시퀀스 — remote heartbeat 가 증분(l.seq > _lastLogSeq)으로 대시보드에 스트림.
+        //    이게 없으면 _collectLogsSince 필터가 전부 탈락해 8787 대시보드 실시간 로그가 비어버린다.
+        this._seq = (this._seq || 0) + 1;
+        this.logs.push({ seq: this._seq, time, type, context, msg: typeof msg === 'string' ? msg : JSON.stringify(msg) });
         if (this.logs.length > this.MAX_LOGS) this.logs.shift();
 
         if (type === 'error' || type === 'critical') {
