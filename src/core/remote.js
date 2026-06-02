@@ -52,6 +52,10 @@ let _lastProgress = null;
 let _externalIp = '';   // 외부 IP(식별/검증용, 1회 조회 후 캐시)
 let _ipQueried = false;
 let _lastLogSeq = 0;    // 마지막으로 서버에 전송한 LogBox seq(로그 증분 전송 커서)
+let _pollInFlight = false;
+let _pollQueued = false;
+let _lastKickAt = 0;
+const POLL_KICK_THROTTLE_MS = 750;
 
 /** upstream 큐 status('completed'/'failed') 종결 판정. */
 function _isFinished(status) { return status === 'completed' || status === 'failed'; }
@@ -349,6 +353,55 @@ async function poll() {
     return pollLegacy(cfg);
 }
 
+function scheduleNextPoll(delayMs, reason = 'timer') {
+    if (!_started) return;
+    if (_timer) {
+        clearTimeout(_timer);
+        _timer = null;
+    }
+    _timer = setTimeout(() => {
+        _timer = null;
+        runPollCycle(reason);
+    }, Math.max(0, delayMs || 0));
+}
+
+async function runPollCycle(reason = 'timer') {
+    if (!_started) return;
+    if (_pollInFlight) {
+        _pollQueued = true;
+        return;
+    }
+
+    _pollInFlight = true;
+    try {
+        await poll();
+    } catch (e) {
+        const m = e && e.message ? e.message : e;
+        try { console.warn('[TokiSync-Remote] poll cycle 실패:', m); } catch {}
+    } finally {
+        _pollInFlight = false;
+        const cfg = getRemoteConfig();
+        if (_pollQueued) {
+            _pollQueued = false;
+            scheduleNextPoll(0, 'queued');
+        } else if (_started && cfg.enabled && cfg.url) {
+            scheduleNextPoll(Math.max(2, cfg.pollSec || 5) * 1000, reason);
+        }
+    }
+}
+
+function kickPoll(reason = 'event', force = false) {
+    if (!_started) return;
+    const now = Date.now();
+    if (!force && now - _lastKickAt < POLL_KICK_THROTTLE_MS) return;
+    _lastKickAt = now;
+    if (_timer) {
+        clearTimeout(_timer);
+        _timer = null;
+    }
+    runPollCycle(reason);
+}
+
 /**
  * 레거시 단일 클라 모드(하위호환) — upstream 큐엔 명령형 addUrls 가 없으므로 명령 적용은 하지 않고
  *   로컬 큐 상태만 /progress 로 미러 보고한다(대시보드 표시용). 멀티-IP(lease) 가 메인 경로.
@@ -574,14 +627,23 @@ export function startRemoteSync() {
 
     window.addEventListener('toki:captcha', onCaptcha);
     window.addEventListener('toki:progress', onProgress);
+    window.addEventListener('toki:remote-kick', (ev) => {
+        const reason = (ev && ev.detail && ev.detail.reason) || 'event';
+        kickPoll(reason, reason === 'worker-finished');
+    });
+    window.addEventListener('focus', () => kickPoll('focus'));
+    window.addEventListener('pageshow', () => kickPoll('pageshow'));
+    window.addEventListener('online', () => kickPoll('online', true));
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') kickPoll('visible', true);
+    });
     // 백업: 팝업이 top까지 보낸 캡차 postMessage도 포착
     window.addEventListener('message', (ev) => {
         if (ev && ev.data && ev.data.type === 'TOKI_CAPTCHA_DETECTED') onCaptcha();
     });
 
-    poll();
-    _timer = setInterval(poll, cfg.pollSec * 1000);
-    try { console.log(`[TokiSync-Remote] polling ${base(cfg.url)} every ${cfg.pollSec}s`); } catch {}
+    kickPoll('start', true);
+    try { console.log(`[TokiSync-Remote] polling ${base(cfg.url)} every ${cfg.pollSec}s (+ event wake)`); } catch {}
 }
 
 /** GM 메뉴에 원격 설정 등록 */

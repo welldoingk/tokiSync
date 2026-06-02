@@ -29,6 +29,16 @@ function focusWorkerWindow(workerRef, context = 'worker') {
     return false;
 }
 
+function kickRemotePoll(reason, queueId) {
+    try {
+        window.dispatchEvent(new CustomEvent('toki:remote-kick', {
+            detail: { reason, queueId, at: Date.now() }
+        }));
+    } catch (err) {
+        console.warn('[WorkerController] 원격 폴링 깨움 신호 실패:', err);
+    }
+}
+
 /**
  * Close active single worker popup window
  */
@@ -465,6 +475,7 @@ export function initBatchWorkerController() {
                 
                 updateQueueItem(matchedId, { status: 'completed', progressPercent: 100, stage: WORKER_STAGE.COMPLETED });
                 logger.updateProgressUI();
+                kickRemotePoll('worker-finished', matchedId);
 
                 // 다음 대기 항목 릴레이 스케줄링
                 runSchedulerOnce();
@@ -509,6 +520,9 @@ export function initBatchWorkerController() {
                         errorMsg: errorMsg || '자식 워커가 에러를 보고함'
                     });
                     logger.updateProgressUI();
+                    if (nextRetry >= 3) {
+                        kickRemotePoll('worker-finished', matchedId);
+                    }
                 }
 
                 // 다음 대기 항목 릴레이 스케줄링
