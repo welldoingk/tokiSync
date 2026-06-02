@@ -18,6 +18,7 @@ export const WORKER_STAGE = {
 
 const STORAGE_KEY = 'tokisync_download_queue';
 const MAX_CONCURRENCY = 2; // 최대 동시 다운로드 수
+const LEASE_MAX_CONCURRENCY = 1; // 멀티-IP lease 모드는 보유 수와 실행 수를 분리해 클라당 1개씩 처리
 
 // 임시 팝업 창 참조 보관용 맵 (Liveness check 및 재활용 루프 대비)
 export const activeWorkers = new Map();
@@ -54,6 +55,8 @@ const saveRawQueue = (queue) => {
   }
 };
 
+const isLeaseQueueItem = (item) => !!(item && item.unitId);
+
 // 32비트 FNV-1a 해시를 36진수 아스키 문자열로 변환하여 한글 유실 없는 고유 아스키 ID 보장
 function tokiHash(str) {
   let hash = 2166136261;
@@ -86,6 +89,7 @@ export const getQueue = () => {
 export const addEpisodesToQueue = (episodes, novelTitle) => {
   const queue = getRawQueue();
   let addedCount = 0;
+  let updatedCount = 0;
 
   episodes.forEach(ep => {
     // FNV 해시를 적용하여 작품명 한글 유실을 차단하고 100% 안전한 고유 아스키 식별자 생성
@@ -93,8 +97,8 @@ export const addEpisodesToQueue = (episodes, novelTitle) => {
     const id = `toki_${hashPart}`;
     
     // 이미 존재하는지 중복성 검사
-    const exists = queue.some(item => item.id === id);
-    if (!exists) {
+    const existingIndex = queue.findIndex(item => item.id === id);
+    if (existingIndex === -1) {
       queue.push({
         id,
         title: novelTitle,
@@ -109,17 +113,40 @@ export const addEpisodesToQueue = (episodes, novelTitle) => {
         novelFormat: ep.novelFormat || 'epub',
         matchedRule: ep.matchedRule || {},
         protocolDomain: ep.protocolDomain || '',
+        unitId: ep.unitId || '',                  // 멀티-IP lease 서버 unit.id — 완료 /complete 매핑용
+        cover: ep.cover || '',                    // lease 자동 펼침 메타: EPUB cover 삽입용
+        meta: ep.meta || null,                    // lease 자동 펼침 메타: ComicInfo/EPUB metadata용
+        series: ep.series || ep.rootFolder || '',
         status: 'pending',
         progressPercent: 0,
         stage: WORKER_STAGE.INIT,
         retryCount: 0,
+        reported: false,
         addedAt: Date.now()
       });
       addedCount++;
+    } else {
+      const existing = queue[existingIndex];
+      const metadataUpdates = {};
+
+      // 기존 버전에서 lease 메타가 누락된 큐 항목을 중복 주입 시점에 보강한다.
+      // 상태는 건드리지 않는다. completed/failed 항목은 remote poll이 보강된 unitId로 /complete를 보고한다.
+      if (ep.unitId && existing.unitId !== ep.unitId) {
+        metadataUpdates.unitId = ep.unitId;
+        metadataUpdates.reported = false;
+      }
+      if (ep.cover && !existing.cover) metadataUpdates.cover = ep.cover;
+      if (ep.meta && !existing.meta) metadataUpdates.meta = ep.meta;
+      if ((ep.series || ep.rootFolder) && !existing.series) metadataUpdates.series = ep.series || ep.rootFolder;
+
+      if (Object.keys(metadataUpdates).length > 0) {
+        queue[existingIndex] = { ...existing, ...metadataUpdates };
+        updatedCount++;
+      }
     }
   });
 
-  if (addedCount > 0) {
+  if (addedCount > 0 || updatedCount > 0) {
     saveRawQueue(queue);
   }
   return addedCount;
@@ -393,15 +420,21 @@ export const runSchedulerOnce = async () => {
     // 1. 현재 processing(작업 중) 상태인 큐 아이템의 개수를 산출
     const currentProcessing = queue.filter(item => item.status === 'processing');
 
-    // 2. 동시성 임계값(MAX_CONCURRENCY = 2) 도달 시 즉시 대기 차단
-    if (currentProcessing.length >= MAX_CONCURRENCY) {
+    // 2. pending(대기 중) 상태인 첫 번째 에피소드 추출
+    const nextItem = queue.find(item => item.status === 'pending');
+    if (!nextItem) {
       isSchedulerRunning = false;
       return;
     }
 
-    // 3. pending(대기 중) 상태인 첫 번째 에피소드 추출
-    const nextItem = queue.find(item => item.status === 'pending');
-    if (!nextItem) {
+    // 3. 동시성 임계값 도달 시 즉시 대기 차단
+    //    leaseMax는 서버에서 "보유할 작업 수"일 뿐, 클라이언트 실행 팝업 수가 아니다.
+    //    unitId가 있는 멀티-IP lease 작업은 클라당 1개씩 순차 처리해 팝업 난립을 막는다.
+    const hasLeaseProcessing = currentProcessing.some(isLeaseQueueItem);
+    const maxConcurrency = (hasLeaseProcessing || isLeaseQueueItem(nextItem))
+      ? LEASE_MAX_CONCURRENCY
+      : MAX_CONCURRENCY;
+    if (currentProcessing.length >= maxConcurrency) {
       isSchedulerRunning = false;
       return;
     }

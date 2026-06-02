@@ -12,6 +12,10 @@ import { getConfig } from './config.js';
 // Reference for the single worker popup (used in sequential mode)
 let activeWorkerRef = null;
 
+function isLeaseQueueItem(item) {
+    return !!(item && item.unitId);
+}
+
 /**
  * Close active single worker popup window
  */
@@ -101,7 +105,7 @@ async function fetchMediaViaWorkerSingleAttempt(episodeUrl, targetType = 'novel'
                 else if (stage === WORKER_STAGE.SCROLLING) stageText = '스크롤 스캔';
                 else if (stage === WORKER_STAGE.PARSING) stageText = '미디어 파싱';
                 else if (stage === WORKER_STAGE.DOWNLOADING) stageText = '다운로드';
-                else if (stage === WORKER_STAGE.UPLOADING) stageText = '드라이브 저장';
+                else if (stage === WORKER_STAGE.UPLOADING) stageText = payload.savedPath ? `${payload.destLabel || '드라이브'} 저장: ${payload.savedPath}` : '드라이브 저장';
                 else if (stage === WORKER_STAGE.COMPLETED) stageText = '완료';
 
                 logger.log(`[수집 진행] [${config.episodeTitle || '에피소드'}] -> ${stageText} (${Math.round(percent)}%)`, 'Downloader');
@@ -109,6 +113,7 @@ async function fetchMediaViaWorkerSingleAttempt(episodeUrl, targetType = 'novel'
 
             // 4. Task completed successfully
             if (type === 'TASK_COMPLETED') {
+                if (payload && payload.savedPath) logger.log(`✅ 저장 완료: [${payload.destLabel || ''}] ${payload.savedPath}`, 'success', 'Downloader');
                 cleanup();
                 
                 // Add WAF jitter delay (3~5s) to stay stealthy
@@ -402,7 +407,7 @@ export function initBatchWorkerController() {
                     else if (stage === WORKER_STAGE.SCROLLING) stageText = '스크롤 스캔';
                     else if (stage === WORKER_STAGE.PARSING) stageText = '미디어 파싱';
                     else if (stage === WORKER_STAGE.DOWNLOADING) stageText = '다운로드';
-                    else if (stage === WORKER_STAGE.UPLOADING) stageText = '드라이브 저장';
+                    else if (stage === WORKER_STAGE.UPLOADING) stageText = payload.savedPath ? `${payload.destLabel || '드라이브'} 저장: ${payload.savedPath}` : '드라이브 저장';
                     else if (stage === WORKER_STAGE.COMPLETED) stageText = '완료';
 
                     logger.log(`[수집 진행] [${item.episodeTitle}] -> ${stageText} (${Math.round(percent)}%)`, 'Downloader');
@@ -424,13 +429,16 @@ export function initBatchWorkerController() {
 
             if (matchedId) {
                 console.log(`[WorkerController] 🎉 [배치] 수집 완료 (ID: ${matchedId})`);
+                if (payload && payload.savedPath) logger.log(`✅ 저장 완료: [${payload.destLabel || ''}] ${payload.savedPath}`, 'success', 'Downloader');
                 
                 const popupRef = activeWorkers.get(matchedId);
                 if (popupRef && !popupRef.closed) {
-                    // [최종 패치] 대기열에 pending 상태의 작업이 남아 있으면 창을 닫지 않고 릴레이용 보존!
                     const queue = getQueue();
+                    const item = queue.find(i => i.id === matchedId);
                     const pendingExists = queue.some(i => i.status === 'pending');
-                    if (!pendingExists) {
+                    // lease 모드는 다음 poll에서 새 unit이 들어올 수 있으므로 completed 팝업을 릴레이 슬롯으로 보존한다.
+                    // 그렇지 않으면 leaseMax 단위로 로컬 pending이 0이 되는 순간 창을 닫고, 다음 lease 때 새 팝업을 계속 만든다.
+                    if (!pendingExists && !isLeaseQueueItem(item)) {
                         popupRef.close();
                         activeWorkers.delete(matchedId);
                     }
@@ -462,10 +470,11 @@ export function initBatchWorkerController() {
                 
                 const popupRef = activeWorkers.get(matchedId);
                 if (popupRef && !popupRef.closed) {
-                    // [최종 패치] 대기열에 남은 작업이 없으면 닫고, 있으면 릴레이용으로 킵!
                     const queue = getQueue();
+                    const item = queue.find(i => i.id === matchedId);
                     const pendingExists = queue.some(i => i.status === 'pending');
-                    if (!pendingExists) {
+                    // lease 항목 실패도 재시도/재임대 흐름에서 같은 팝업 슬롯을 재사용할 수 있게 보존한다.
+                    if (!pendingExists && !isLeaseQueueItem(item)) {
                         popupRef.close();
                         activeWorkers.delete(matchedId);
                     }
