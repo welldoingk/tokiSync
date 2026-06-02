@@ -6,16 +6,36 @@ import { initWorkerExtractor } from './worker-extractor.js';
 
     // ── 🔒 [초고도 스텔스 섀도 DOM 개방 및 클로킹 엔진] ────────────────
     try {
+        // 워커 여부를 opener 가 null 로 덮이기 전(아래 Early-Exit 블록)에 캡처.
+        const _isWorker = !!window.opener;
         const originalAttachShadow = Element.prototype.attachShadow;
         const originalToString = Function.prototype.toString;
         const originalCreateElement = Document.prototype.createElement;
 
+        // 선택적 개방 가드 — sbxh 변조 탐지 probe(문서 미연결 임시 div 의 closed shadow) 회피.
+        //   모든 closed shadow 를 열면 그 probe 까지 열려 연속 다운로드 시 ntk_blk 하드차단됨.
+        //   → 워커 컨텍스트 + /novel/ URL + 본문 호스트일 때만 open, probe 는 닫힌 채 유지.
+        //   (본문은 주로 window.__novelTTSText(Plan D)로 확보, shadow 는 폴백 경로)
+        const _gmForce = (typeof GM_getValue !== 'undefined') &&
+            (GM_getValue('TOKI_FORCE_OPEN_SHADOW', false) === true || GM_getValue('TOKI_FORCE_OPEN_SHADOW', false) === '1');
+        const _shouldOpenShadow = (host) => {
+            try {
+                if (!_isWorker && !_gmForce) return false;                 // 부모 페이지는 미개입
+                if (!/\/novel\//i.test(location.pathname) && !_gmForce) return false; // 만화 OFF
+                if (!host || host.nodeType !== 1) return false;
+                const st = (host.getAttribute && host.getAttribute('style')) || '';
+                if (/--novel-font-size/i.test(st)) return true;            // 본문 호스트(가장 강한 신호)
+                if (!host.isConnected) return false;                       // detached = 탐지 probe → 제외
+                return !!(host.closest && host.closest('article.novel-viewer, #novel_content, .novel-viewer, .novel-epub-rendered'));
+            } catch (e) { return false; }
+        };
+
         if (originalAttachShadow) {
-            // A. 초스텔스 개방 가로채기 함수 정의
+            // A. 선택적 개방 가로채기 함수 정의 (본문 호스트만, probe 는 닫힌 채)
             const customAttachShadow = function attachShadow(init) {
-                if (init && init.mode === 'closed') {
+                if (init && init.mode === 'closed' && _shouldOpenShadow(this)) {
                     init.mode = 'open';
-                    console.log('[TokiSync] 🔒 닫힌 Shadow DOM -> Open 모드로 은밀 개방 완료');
+                    console.log('[TokiSync] 🔓 본문 호스트 닫힌 Shadow 선택적 개방');
                 }
                 return originalAttachShadow.apply(this, arguments);
             };

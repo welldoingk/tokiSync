@@ -13,16 +13,17 @@ import { GenericParser } from './parsers/GenericParser.js';
 import { fetchNovelTextViaApi } from './novel-decryptor.js';
 
 // Define localized stage reporting helper
-function reportProgress(queueId, percent, stage) {
+function reportProgress(queueId, percent, stage, extra = {}) {
     updateQueueItem(queueId, {
         progressPercent: Math.min(100, Math.max(0, Math.round(percent))),
         stage: stage
     });
-    // Send lightweight progress update to parent UI
+    // Send lightweight progress update to parent UI (extra: destLabel/savedPath 등 동봉)
     sendToParent('WORKER_PROGRESS', {
         queueId,
         percent: Math.min(100, Math.max(0, Math.round(percent))),
-        stage
+        stage,
+        ...extra
     });
 }
 
@@ -98,6 +99,10 @@ export function initWorkerExtractor() {
                 let blob = null;
                 const configNovelFormat = novelFormat || 'epub';
                 const extension = (targetType === 'novel') ? configNovelFormat : 'cbz';
+                // NAS/저장 카테고리는 룰 원본(Webtoon/Manga/Novel)을 쓴다.
+                //   targetType 은 novel/comic 2분류라 Webtoon↔Manga 구분이 사라지고,
+                //   소문자라 Synology 에서 기존 대문자 폴더와 대소문자 충돌(UploadDBCaseConflict)을 유발한다.
+                const storageCategory = (matchedRule && matchedRule.category) || (targetType === 'novel' ? 'Novel' : 'Webtoon');
                 
                 // Final Filename: Dynamic based on Template or Drive fallback
                 let fullFilename;
@@ -122,46 +127,82 @@ export function initWorkerExtractor() {
                 if (targetType === 'novel') {
                     reportProgress(queueId, 20, WORKER_STAGE.DOM_READY);
                     let content = "";
-                    let attempt = 0;
-                    const maxAttempts = 10;
 
-                    // Poll Shadow DOM for novel text
-                    while (attempt < maxAttempts) {
-                        attempt++;
-                        console.log(`[TokiSync:Worker] 소설 Shadow DOM 폴링 중... (${attempt}/${maxAttempts})`);
-                        
-                        const novelSel = viewerCfg.novelContent || '#novel_content';
-                        const shadowHost = document.querySelector(novelSel)?.getRootNode()?.host
-                                        || document.querySelector('.novel-epub-rendered')?.getRootNode()?.host
-                                        || document.querySelector('.vw-bot-mini--novel')?.parentElement?.querySelector('div[style*="--novel-font-size"]');
-
-                        if (shadowHost && shadowHost.shadowRoot) {
-                            reportProgress(queueId, 50, WORKER_STAGE.PARSING);
-                            const pTags = shadowHost.shadowRoot.querySelectorAll('.novel-epub-rendered p, p');
-                            if (pTags.length > 0) {
-                                content = Array.from(pTags)
-                                    .map(p => p.textContent.trim())
-                                    .filter(text => text.length > 0)
-                                    .join('\n\n');
-                            } else {
-                                const bodyEl = shadowHost.shadowRoot.querySelector('.novel-epub-rendered');
-                                if (bodyEl) {
-                                    content = bodyEl.innerText || bodyEl.textContent;
-                                } else {
-                                    const tempDiv = document.createElement('div');
-                                    tempDiv.innerHTML = shadowHost.shadowRoot.innerHTML;
-                                    tempDiv.querySelectorAll('style, script').forEach(el => el.remove());
-                                    content = tempDiv.innerText || tempDiv.textContent;
-                                }
-                            }
-                            break;
+                    // --- Plan D (1순위): 페이지가 복호화해 노출한 평문 본문 (가장 안전) ---
+                    //   sbxh(뉴토끼)는 /api/novel-content 복호화 결과를 TTS(음성읽기)용으로
+                    //   window.__novelTTSText 와 'novel-content-ready' 이벤트(detail.text)에
+                    //   평문으로 싣는다(문단 \n\n 보존). shadow/probe/복호화 일절 무관 →
+                    //   안티-변조 footprint 0. (win-c 실측: 173문단 평문 확인, ntk_blk 없음)
+                    //   워커는 회차 URL 을 window.open 으로 직접 여는 full-load 라 본문이 안정적으로 채워짐.
+                    try {
+                        const readTTS = () => (typeof window.__novelTTSText === 'string') ? window.__novelTTSText : '';
+                        let ttsText = readTTS();
+                        if (!ttsText || ttsText.trim().length < 100) {
+                            // 아직 미충전 → 이벤트 + 폴링 병행(최대 ~6s)
+                            ttsText = await new Promise((resolve) => {
+                                let done = false;
+                                const finish = (v) => { if (done) return; done = true; clearInterval(iv); window.removeEventListener('novel-content-ready', onReady); resolve(v || ''); };
+                                const onReady = (e) => { const t = e?.detail?.text; if (typeof t === 'string' && t.trim().length >= 100) finish(t); };
+                                window.addEventListener('novel-content-ready', onReady);
+                                let n = 0;
+                                const iv = setInterval(() => {
+                                    const cur = readTTS();
+                                    if (cur && cur.trim().length >= 100) finish(cur);
+                                    else if (++n >= 12) finish('');
+                                }, 500);
+                            });
                         }
-                        await sleep(500);
+                        if (ttsText && ttsText.trim().length >= 100) {
+                            content = ttsText.trim();
+                            reportProgress(queueId, 50, WORKER_STAGE.PARSING);
+                            console.log(`[TokiSync:Worker] ✅ Plan D(__novelTTSText) 본문 확보: ${content.length}자`);
+                        }
+                    } catch (e) {
+                        console.warn('[TokiSync:Worker] Plan D 추출 예외(무시, 폴백 진행):', e.message);
                     }
 
-                    // Fallback to Plan C: Decryption API
+                    // --- Plan B (2순위): 닫힌 shadow DOM 본문 (index.js 선택적 force-open 전제) ---
+                    if (!content || content.trim().length < 100) {
+                        let attempt = 0;
+                        const maxAttempts = 10;
+                        // Poll Shadow DOM for novel text
+                        while (attempt < maxAttempts) {
+                            attempt++;
+                            console.log(`[TokiSync:Worker] 소설 Shadow DOM 폴링 중... (${attempt}/${maxAttempts})`);
+
+                            const novelSel = viewerCfg.novelContent || '#novel_content';
+                            const shadowHost = document.querySelector(novelSel)?.getRootNode()?.host
+                                            || document.querySelector('.novel-epub-rendered')?.getRootNode()?.host
+                                            || document.querySelector('.vw-bot-mini--novel')?.parentElement?.querySelector('div[style*="--novel-font-size"]');
+
+                            if (shadowHost && shadowHost.shadowRoot) {
+                                reportProgress(queueId, 50, WORKER_STAGE.PARSING);
+                                const pTags = shadowHost.shadowRoot.querySelectorAll('.novel-epub-rendered p, p');
+                                if (pTags.length > 0) {
+                                    content = Array.from(pTags)
+                                        .map(p => p.textContent.trim())
+                                        .filter(text => text.length > 0)
+                                        .join('\n\n');
+                                } else {
+                                    const bodyEl = shadowHost.shadowRoot.querySelector('.novel-epub-rendered');
+                                    if (bodyEl) {
+                                        content = bodyEl.innerText || bodyEl.textContent;
+                                    } else {
+                                        const tempDiv = document.createElement('div');
+                                        tempDiv.innerHTML = shadowHost.shadowRoot.innerHTML;
+                                        tempDiv.querySelectorAll('style, script').forEach(el => el.remove());
+                                        content = tempDiv.innerText || tempDiv.textContent;
+                                    }
+                                }
+                                break;
+                            }
+                            await sleep(500);
+                        }
+                    }
+
+                    // --- Plan C (3순위): Decryption API ---
                     if ((!content || content.trim().length < 100) && viewerCfg.decryptApi) {
-                        console.warn("[TokiSync:Worker] Shadow DOM 추출 실패 - Plan C API 복호화 폴백 구동");
+                        console.warn("[TokiSync:Worker] Plan D/B 실패 - Plan C API 복호화 폴백 구동");
                         content = await fetchNovelTextViaApi(window.location.href, viewerCfg.decryptApi);
                     }
 
@@ -323,34 +364,38 @@ export function initWorkerExtractor() {
                         summary: (meta && meta.summary) || '',
                         status: (meta && meta.status) || '',
                         tags: (meta && meta.tags) || [],
-                        category: targetType
+                        category: storageCategory
                     });
                     blob = await zip.generateAsync({ type: 'blob' });
                 }
 
                 // --- 3. STORAGE PERSISTENCE (Direct Save/Upload) ---
-                console.log(`[TokiSync:Worker] I/O 드라이버 기동 - 저장소 적재 시작 (${destination})`);
-                reportProgress(queueId, 90, WORKER_STAGE.UPLOADING);
+                // 저장 대상 라벨 + 실제 경로 — 진행 라벨/완료 로그/IPC 에 동봉해 대시보드에서 실제 경로 표시.
+                const _destLabel = (destination === 'native' || destination === 'webdav') ? 'NAS'
+                                 : (destination === 'drive') ? '드라이브' : '로컬';
+                const _savedPath = `${storageCategory}/${rootFolder || seriesTitle}/${fullFilename}.${extension}`;
+                console.log(`[TokiSync:Worker] I/O 드라이버 기동 - 저장소 적재 시작 (${destination} → ${_savedPath})`);
+                reportProgress(queueId, 90, WORKER_STAGE.UPLOADING, { destLabel: _destLabel, savedPath: _savedPath });
 
                 await saveFile(blob, fullFilename, destination || 'drive', extension, {
                     folderName: rootFolder || seriesTitle,
-                    category: targetType,
+                    category: storageCategory,
                     folderId: folderId || ''
                 });
 
-                console.log(`[TokiSync:Worker] 🎉 에피소드 수집 & 저장 완착 완료! (${fullFilename})`);
-                
+                console.log(`[TokiSync:Worker] 🎉 에피소드 수집 & 저장 완착 완료! (${_destLabel}: ${_savedPath})`);
+
                 // Update final queue status inside Dexie/GM storage
-                updateQueueItem(queueId, { 
-                    status: 'completed', 
-                    stage: WORKER_STAGE.COMPLETED, 
-                    progressPercent: 100 
+                updateQueueItem(queueId, {
+                    status: 'completed',
+                    stage: WORKER_STAGE.COMPLETED,
+                    progressPercent: 100
                 });
-                
-                reportProgress(queueId, 100, WORKER_STAGE.COMPLETED);
-                
+
+                reportProgress(queueId, 100, WORKER_STAGE.COMPLETED, { destLabel: _destLabel, savedPath: _savedPath });
+
                 // Notify parent that task succeeded
-                sendToParent('TASK_COMPLETED', { queueId });
+                sendToParent('TASK_COMPLETED', { queueId, destLabel: _destLabel, savedPath: _savedPath });
                 cleanupIpc();
 
             } catch (err) {
