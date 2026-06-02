@@ -22,6 +22,7 @@ import {
     getQueue,
     updateQueueItem,
     initQueueScheduler,
+    runSchedulerOnce,
     setQueuePaused,
     stopAllWorkers,
     clearQueue,
@@ -432,6 +433,7 @@ async function pollLease(cfg) {
     {
         const cur = getQueue();
         const current = cur.filter((i) => i.unitId && (i.status === 'pending' || i.status === 'processing')).map((i) => i.unitId);
+        const processing = cur.filter((i) => i.unitId && i.status === 'processing').map((i) => i.unitId);
         const queueSummary = cur.map((i) => ({ id: i.id, status: i.status, episodeNum: i.episodeNum, unitId: i.unitId, progressPercent: i.progressPercent }));
         try {
             hbRes = await gmRequest({
@@ -443,7 +445,7 @@ async function pollLease(cfg) {
                     label: cfg.clientId,
                     ip: await ensureExternalIp(),
                     queue: queueSummary,
-                    running: current.length > 0,
+                    running: processing.length > 0,
                     progress: _lastProgress,
                     current,
                     logs: _collectLogsSince(), // 새 로그 증분 동봉(대시보드 실시간 로그 패널용)
@@ -477,6 +479,17 @@ async function pollLease(cfg) {
     //    스케줄러는 getQueuePaused() 를 보고 새 워커 기동을 보류한다. 정지면 자동 펼침도 생략.
     setQueuePaused(!!(hbRes && hbRes.paused));
     if (hbRes && hbRes.paused) return;
+
+    // 서버가 정지였다가 재개된 경우, 로컬 큐에는 이미 pending lease가 있지만
+    // GM storage 변경 이벤트가 새로 발생하지 않아 스케줄러가 잠든 채 남을 수 있다.
+    // unpaused heartbeat마다 가볍게 1회 깨워 마지막 보유 lease도 실행되게 한다.
+    try {
+        const q = getQueue();
+        if (q.some((i) => i.unitId && i.status === 'pending') &&
+            !q.some((i) => i.unitId && i.status === 'processing')) {
+            runSchedulerOnce();
+        }
+    } catch (e) {}
 
     // ⑤ 작품 자동 펼침 — heartbeat 응답의 expand 요청을 처리(Cloudflare 통과한 이 브라우저가
     //    회차 목록을 받아 /jobs 로 투입). 멱등이라 다른 클라가 동시에 처리해도 중복은 흡수된다.
