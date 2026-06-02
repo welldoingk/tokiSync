@@ -39,6 +39,38 @@ function kickRemotePoll(reason, queueId) {
     }
 }
 
+const PAGE_LOAD_STALL_TIMEOUT_MS = 90000;
+const WORKER_PROGRESS_STALL_TIMEOUT_MS = 180000;
+
+function recoverStalledBatchWorker(id, popupRef, item, reason, logger, closedCounts) {
+    try {
+        const actualRef = popupRef && (popupRef.ref || popupRef);
+        if (actualRef && !actualRef.closed) actualRef.close();
+    } catch (err) {
+        console.warn(`[WorkerController] [배치] 정체 워커 close 실패 (${id}):`, err);
+    }
+
+    activeWorkers.delete(id);
+    if (closedCounts) closedCounts.delete(id);
+
+    const nextRetry = (item.retryCount || 0) + 1;
+    const failed = nextRetry >= 3;
+    updateQueueItem(id, {
+        status: failed ? 'failed' : 'pending',
+        retryCount: nextRetry,
+        stage: failed ? WORKER_STAGE.FAILED : WORKER_STAGE.INIT,
+        progressPercent: 0,
+        startedAt: 0,
+        lastProgressAt: 0,
+        errorMsg: reason
+    });
+
+    const title = item.episodeTitle || item.title || id;
+    logger.warn(`[배치 정체복구] [${title}] ${reason} → ${failed ? '실패 처리' : '재시도'} (${nextRetry}/3)`, 'Queue');
+    if (failed) kickRemotePoll('worker-finished', id);
+    runSchedulerOnce();
+}
+
 /**
  * Close active single worker popup window
  */
@@ -298,8 +330,10 @@ export function initBatchWorkerController() {
     const batchClosedCounts = new Map();
     setInterval(() => {
         const queue = getQueue();
+        const now = Date.now();
         for (const [id, popupRef] of activeWorkers.entries()) {
             const actualRef = popupRef && (popupRef.ref || popupRef);
+            const item = queue.find(i => i.id === id);
             if (actualRef && actualRef.closed) {
                 const closedCount = (batchClosedCounts.get(id) || 0) + 1;
                 batchClosedCounts.set(id, closedCount);
@@ -318,11 +352,45 @@ export function initBatchWorkerController() {
                             errorMsg: '자식 팝업 창이 비정상적으로 강제 종료되었습니다.'
                         });
                         logger.error(`❌ [배치 수동종료] [${item.episodeTitle}] 자식 팝업이 종료되어 복구를 단행합니다.`, 'Queue');
+                        if (nextRetry >= 3) kickRemotePoll('worker-finished', id);
                         runSchedulerOnce();
                     }
                 }
             } else {
                 batchClosedCounts.set(id, 0);
+
+                if (item && item.status === 'processing') {
+                    const startedAt = Number(item.startedAt || 0);
+                    if (!startedAt) {
+                        updateQueueItem(id, { startedAt: now, lastProgressAt: now });
+                        continue;
+                    }
+
+                    const lastProgressAt = Number(item.lastProgressAt || startedAt);
+                    const percent = Number(item.progressPercent || 0);
+                    const stage = item.stage || WORKER_STAGE.INIT;
+                    const pageLoading = stage === WORKER_STAGE.INIT || stage === WORKER_STAGE.DOM_READY;
+
+                    if (pageLoading && percent < 20 && now - startedAt > PAGE_LOAD_STALL_TIMEOUT_MS) {
+                        recoverStalledBatchWorker(
+                            id,
+                            popupRef,
+                            item,
+                            `페이지 로딩 정체 ${Math.round((now - startedAt) / 1000)}초`,
+                            logger,
+                            batchClosedCounts
+                        );
+                    } else if (percent < 100 && now - lastProgressAt > WORKER_PROGRESS_STALL_TIMEOUT_MS) {
+                        recoverStalledBatchWorker(
+                            id,
+                            popupRef,
+                            item,
+                            `진행률 정체 ${Math.round((now - lastProgressAt) / 1000)}초`,
+                            logger,
+                            batchClosedCounts
+                        );
+                    }
+                }
             }
         }
     }, 2000);
@@ -427,7 +495,7 @@ export function initBatchWorkerController() {
                 const queue = getQueue();
                 const item = queue.find(i => i.id === matchedId);
                 if (item) {
-                    updateQueueItem(matchedId, { progressPercent: percent, stage: stage });
+                    updateQueueItem(matchedId, { progressPercent: percent, stage: stage, lastProgressAt: Date.now() });
                     
                     let stageText = '대기 중';
                     if (stage === WORKER_STAGE.DOM_READY) stageText = '페이지 로딩';

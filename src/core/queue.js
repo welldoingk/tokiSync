@@ -465,7 +465,14 @@ export const runSchedulerOnce = async () => {
 
     // 5. 팝업 실행 및 상태 갱신
     console.log(`[Queue Scheduler] 🚀 팝업 릴레이 기동: ${nextItem.episodeTitle} (${nextItem.episodeUrl})`);
-    updateQueueItem(nextItem.id, { status: 'processing' });
+    updateQueueItem(nextItem.id, {
+      status: 'processing',
+      stage: WORKER_STAGE.INIT,
+      progressPercent: 0,
+      startedAt: Date.now(),
+      lastProgressAt: Date.now(),
+      errorMsg: ''
+    });
     
     // 유효한 기존 팝업 채널 재사용 탐색
     let recycledPopup = null;

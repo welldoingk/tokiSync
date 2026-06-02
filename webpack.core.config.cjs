@@ -7,7 +7,7 @@ const TerserPlugin = require('terser-webpack-plugin');
 const METADATA_MAIN = `// ==UserScript==
 // @name         TokiSync (Link to Drive) [LAN Custom v1.21]
 // @namespace    local://lan/tokisync-custom
-// @version      1.21.5-multi.260602-14
+// @version      1.21.5-multi.260602-15
 // @description  Toki series sites -> NAS/Drive syncing (Bundled) — LAN custom: 멀티-IP lease + 네이티브 NAS(WebDAV) on upstream v1.21.5
 // @author       pray4skylark + local patch
 // @updateURL    http://192.168.0.100:8765/docs/tokiSync.user.js
