@@ -386,6 +386,13 @@ export class Store {
         }
     }
 
+    clientLeaseIds(clientId, now) {
+        this._expire(now);
+        return this.state.units
+            .filter((u) => u.status === 'leased' && u.clientId === clientId)
+            .map((u) => u.id);
+    }
+
     /** 클라이언트별 로그 증분 조회(대시보드 실시간 로그 패널). since 보다 큰 seq 만 반환 + 최신 seq. */
     getClientLogs(clientId, since) {
         const r = this.state.reports[clientId];
@@ -442,18 +449,23 @@ export class Store {
         for (const u of this.state.units) {
             if (pool[u.status] !== undefined) pool[u.status]++;
         }
-        const clients = Object.entries(this.state.reports).map(([id, r]) => ({
-            clientId: id,
-            label: r.label,
-            ip: r.ip,
-            online: r.ts > 0 && now - r.ts < onlineWindowMs,
-            running: r.running,
-            progress: r.progress,
-            current: r.current,
-            leased: this.state.units.filter((u) => u.status === 'leased' && u.clientId === id).length,
-            version: r.version || '',
-            ts: r.ts,
-        }));
+        const clients = Object.entries(this.state.reports).map(([id, r]) => {
+            const leasedUnits = this.state.units.filter((u) => u.status === 'leased' && u.clientId === id);
+            const leasedIds = new Set(leasedUnits.map((u) => u.id));
+            const current = Array.isArray(r.current) ? r.current.filter((unitId) => leasedIds.has(unitId)) : [];
+            return {
+                clientId: id,
+                label: r.label,
+                ip: r.ip,
+                online: r.ts > 0 && now - r.ts < onlineWindowMs,
+                running: !!r.running && current.length > 0,
+                progress: r.progress,
+                current,
+                leased: leasedUnits.length,
+                version: r.version || '',
+                ts: r.ts,
+            };
+        });
         return { pool, clients, serverTime: now };
     }
 

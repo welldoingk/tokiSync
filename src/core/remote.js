@@ -20,6 +20,7 @@
 import {
     addEpisodesToQueue,
     getQueue,
+    removeQueueItem,
     updateQueueItem,
     initQueueScheduler,
     runSchedulerOnce,
@@ -475,6 +476,10 @@ async function pollLease(cfg) {
         } catch (e) {}
     }
 
+    // ③-c lease 소유권 재동기화 — 서버가 TTL 만료/재시작 후 unit을 다른 클라에 재임대한 경우,
+    //      기존 클라 로컬 큐의 stale pending/processing을 제거해 대시보드 current/running 불일치와 중복 수집을 막는다.
+    reconcileOwnedLeases(hbRes && hbRes.ownedLeaseIds);
+
     // ④ paused 동기화 — 서버 정지 상태를 upstream 큐 일시정지(setQueuePaused)에 반영.
     //    스케줄러는 getQueuePaused() 를 보고 새 워커 기동을 보류한다. 정지면 자동 펼침도 생략.
     setQueuePaused(!!(hbRes && hbRes.paused));
@@ -527,6 +532,26 @@ function onCaptcha() {
 
 function onProgress(e) {
     _lastProgress = (e && e.detail) || null;
+}
+
+function reconcileOwnedLeases(ownedLeaseIds) {
+    if (!Array.isArray(ownedLeaseIds)) return 0;
+    const owned = new Set(ownedLeaseIds);
+    const q = getQueue();
+    const lost = q.filter((i) =>
+        i && i.unitId &&
+        (i.status === 'pending' || i.status === 'processing') &&
+        !owned.has(i.unitId)
+    );
+    for (const item of lost) {
+        try { removeQueueItem(item.id); } catch (e) {}
+    }
+    if (lost.length) {
+        try {
+            LogBox.getInstance().log(`↩️ 서버 lease 소유권 상실 감지 → 로컬 작업 ${lost.length}건 제거`, 'warn', 'Remote');
+        } catch (e) {}
+    }
+    return lost.length;
 }
 
 /** 큐 폴링 시작 (top window 한정) */
