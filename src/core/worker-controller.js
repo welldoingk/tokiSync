@@ -42,6 +42,42 @@ function kickRemotePoll(reason, queueId) {
 const PAGE_LOAD_STALL_TIMEOUT_MS = 90000;
 const WORKER_PROGRESS_STALL_TIMEOUT_MS = 180000;
 
+function shortText(value, maxLen = 90) {
+    const text = value == null ? '' : String(value);
+    return text.length > maxLen ? `${text.slice(0, maxLen)}...` : text;
+}
+
+function formatDiagnosticSummary(diagnostics) {
+    if (!diagnostics) return '';
+    const nav = diagnostics.nav ? `nav=${diagnostics.nav.type}/${diagnostics.nav.duration}ms` : '';
+    const flags = [
+        diagnostics.cloudflare ? 'cloudflare' : '',
+        diagnostics.captcha ? 'captcha' : '',
+        diagnostics.hasFocus === false ? 'no-focus' : '',
+        diagnostics.visibility && diagnostics.visibility !== 'visible' ? `visibility=${diagnostics.visibility}` : ''
+    ].filter(Boolean).join(',');
+    return [
+        `phase=${diagnostics.phase || 'unknown'}`,
+        `ready=${diagnostics.readyState || '-'}`,
+        flags ? `flags=${flags}` : '',
+        `body=${diagnostics.bodyTextLen || 0}`,
+        `container=${diagnostics.containers || 0}/${diagnostics.containerChildren || 0}`,
+        `img=${diagnostics.validImgCount || 0}/${diagnostics.imgCount || 0}`,
+        `complete=${diagnostics.completeImgCount || 0}`,
+        `dummy=${diagnostics.dummyImgCount || 0}`,
+        `lazy=${diagnostics.lazyAttrCount || 0}`,
+        diagnostics.ttsTextLen ? `tts=${diagnostics.ttsTextLen}` : '',
+        diagnostics.novelTextLen ? `novel=${diagnostics.novelTextLen}` : '',
+        nav,
+        diagnostics.title ? `title="${shortText(diagnostics.title, 60)}"` : '',
+        diagnostics.firstImg ? `firstImg="${shortText(diagnostics.firstImg, 90)}"` : ''
+    ].filter(Boolean).join(' · ');
+}
+
+function shouldLogDiagnosticPhase(phase) {
+    return /timeout|empty|captcha|cloudflare|suspicious|error|stalled/i.test(phase || '');
+}
+
 function recoverStalledBatchWorker(id, popupRef, item, reason, logger, closedCounts) {
     try {
         const actualRef = popupRef && (popupRef.ref || popupRef);
@@ -55,6 +91,8 @@ function recoverStalledBatchWorker(id, popupRef, item, reason, logger, closedCou
 
     const nextRetry = (item.retryCount || 0) + 1;
     const failed = nextRetry >= 3;
+    const diagnosticSummary = formatDiagnosticSummary(item.diagnostics);
+    const errorMsg = diagnosticSummary ? `${reason}; ${diagnosticSummary}` : reason;
     updateQueueItem(id, {
         status: failed ? 'failed' : 'pending',
         retryCount: nextRetry,
@@ -62,11 +100,11 @@ function recoverStalledBatchWorker(id, popupRef, item, reason, logger, closedCou
         progressPercent: 0,
         startedAt: 0,
         lastProgressAt: 0,
-        errorMsg: reason
+        errorMsg
     });
 
     const title = item.episodeTitle || item.title || id;
-    logger.warn(`[배치 정체복구] [${title}] ${reason} → ${failed ? '실패 처리' : '재시도'} (${nextRetry}/3)`, 'Queue');
+    logger.warn(`[배치 정체복구] [${title}] ${errorMsg} → ${failed ? '실패 처리' : '재시도'} (${nextRetry}/3)`, 'Queue');
     if (failed) kickRemotePoll('worker-finished', id);
     runSchedulerOnce();
 }
@@ -480,7 +518,32 @@ export function initBatchWorkerController() {
             }
         }
 
-        // 3. WORKER_PROGRESS: 자식 워커 실시간 진행률 UI 반영
+        // 3. WORKER_DIAGNOSTICS: 페이지 로딩/DOM/lazy-load 상태 진단 수집
+        if (type === 'WORKER_DIAGNOSTICS') {
+            const { queueId, phase, diagnostics } = payload || {};
+            let matchedId = queueId;
+
+            if (!matchedId) {
+                for (const [id, popupRef] of activeWorkers.entries()) {
+                    if (popupRef === sourceEvent.source) { matchedId = id; break; }
+                }
+            }
+
+            if (matchedId) {
+                const queue = getQueue();
+                const item = queue.find(i => i.id === matchedId);
+                const diag = { phase: phase || 'unknown', ...(diagnostics || {}) };
+                updateQueueItem(matchedId, { diagnostics: diag, lastDiagnosticAt: Date.now() });
+                const summary = formatDiagnosticSummary(diag);
+                if (item && summary && shouldLogDiagnosticPhase(phase)) {
+                    logger.warn(`[진단] [${item.episodeTitle || item.title || matchedId}] ${summary}`, 'WorkerDiag');
+                } else if (summary) {
+                    console.log(`[WorkerController] [진단] ${matchedId}: ${summary}`);
+                }
+            }
+        }
+
+        // 4. WORKER_PROGRESS: 자식 워커 실시간 진행률 UI 반영
         if (type === 'WORKER_PROGRESS') {
             const { percent, stage, queueId } = payload || {};
             let matchedId = queueId;
@@ -511,7 +574,7 @@ export function initBatchWorkerController() {
             }
         }
 
-        // 4. TASK_COMPLETED: 자식 워커 수집 및 드라이브 저장 정상 완료
+        // 5. TASK_COMPLETED: 자식 워커 수집 및 드라이브 저장 정상 완료
         if (type === 'TASK_COMPLETED') {
             const { queueId } = payload || {};
             let matchedId = queueId;
@@ -550,7 +613,7 @@ export function initBatchWorkerController() {
             }
         }
 
-        // 5. TASK_FAILED: 예외 및 복구 불능 실패 보고
+        // 6. TASK_FAILED: 예외 및 복구 불능 실패 보고
         if (type === 'TASK_FAILED') {
             const { errorMsg, queueId } = payload || {};
             let matchedId = queueId;

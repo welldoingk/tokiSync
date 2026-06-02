@@ -27,6 +27,98 @@ function reportProgress(queueId, percent, stage, extra = {}) {
     });
 }
 
+function queryAllSafe(doc, selector) {
+    try { return selector ? Array.from(doc.querySelectorAll(selector)) : []; }
+    catch { return []; }
+}
+
+function collectPageDiagnostics(viewerCfg = {}, extra = {}) {
+    const doc = document;
+    const imageItem = viewerCfg.imageItem || 'img';
+    const imageSelector = viewerCfg.imageContainer
+        ? viewerCfg.imageContainer.split(',').map(c => `${c.trim()} ${imageItem}`).join(', ')
+        : '.view-padding div img, .viewer-main img, #v_content img, .img-tag, img';
+    const containerSelector = viewerCfg.imageContainer || '.view-padding, .viewer-main, #v_content';
+    const novelSelector = viewerCfg.novelContent || '#novel_content';
+    const allImgs = queryAllSafe(doc, imageSelector);
+    const containers = queryAllSafe(doc, containerSelector);
+    const srcOf = (img) => img.currentSrc || img.src || img.getAttribute('data-src') || img.getAttribute('data-lazy') || img.getAttribute('data-original') || '';
+    const isDummySrc = (src) => {
+        if (!src || src.startsWith('data:image')) return true;
+        const lower = src.toLowerCase();
+        return ['blank.gif', 'loading.gif', 'loading-image.gif', 'pixel.gif', 'spacer.gif', 'transparent.gif', '1x1.gif', 'dot.gif']
+            .some(p => lower.includes(p));
+    };
+    const srcs = allImgs.map(srcOf);
+    const validImgs = srcs.filter(src => src && !isDummySrc(src));
+    const novelEl = queryAllSafe(doc, novelSelector)[0] || null;
+    const ttsText = typeof window.__novelTTSText === 'string' ? window.__novelTTSText : '';
+    const cf = !!(
+        doc.title.includes('Just a moment') ||
+        doc.getElementById('cf-challenge-running') ||
+        doc.querySelector('.cf-browser-verification') ||
+        doc.getElementById('challenge-running')
+    );
+    const captcha = !!(
+        doc.querySelector('fieldset#captcha, fieldset.captcha') ||
+        doc.querySelector('img.captcha_img, img[src*="kcaptcha_image.php"]') ||
+        doc.querySelector('form[action*="captcha_check.php"]') ||
+        doc.querySelector('iframe[src*="hcaptcha"]') ||
+        doc.querySelector('.g-recaptcha')
+    );
+
+    let nav = null;
+    try {
+        const entry = performance.getEntriesByType && performance.getEntriesByType('navigation')[0];
+        if (entry) {
+            nav = {
+                type: entry.type,
+                duration: Math.round(entry.duration || 0),
+                domContentLoaded: Math.round(entry.domContentLoadedEventEnd || 0),
+                loadEnd: Math.round(entry.loadEventEnd || 0)
+            };
+        }
+    } catch {}
+
+    return {
+        href: location.href,
+        title: doc.title || '',
+        readyState: doc.readyState,
+        visibility: doc.visibilityState,
+        hasFocus: typeof doc.hasFocus === 'function' ? doc.hasFocus() : null,
+        bodyChildren: doc.body ? doc.body.children.length : 0,
+        bodyTextLen: doc.body ? (doc.body.innerText || doc.body.textContent || '').trim().length : 0,
+        containers: containers.length,
+        containerChildren: containers.reduce((sum, el) => sum + (el.children ? el.children.length : 0), 0),
+        imageSelector,
+        imgCount: allImgs.length,
+        validImgCount: validImgs.length,
+        dummyImgCount: srcs.filter(isDummySrc).length,
+        completeImgCount: allImgs.filter(img => img.complete && img.naturalWidth > 0).length,
+        lazyAttrCount: allImgs.filter(img => img.getAttribute('data-src') || img.getAttribute('data-lazy') || img.getAttribute('data-original')).length,
+        firstImg: validImgs[0] || srcs[0] || '',
+        novelFound: !!novelEl,
+        novelTextLen: novelEl ? (novelEl.innerText || novelEl.textContent || '').trim().length : 0,
+        ttsTextLen: ttsText.trim().length,
+        cloudflare: cf,
+        captcha,
+        nav,
+        ...extra
+    };
+}
+
+function sendDiagnostics(queueId, phase, viewerCfg = {}, extra = {}) {
+    try {
+        sendToParent('WORKER_DIAGNOSTICS', {
+            queueId,
+            phase,
+            diagnostics: collectPageDiagnostics(viewerCfg, extra)
+        });
+    } catch (e) {
+        console.warn('[TokiSync:Worker] 진단 정보 전송 실패:', e.message);
+    }
+}
+
 /**
  * Main execution of the Self-contained Worker
  */
@@ -57,6 +149,8 @@ export function initWorkerExtractor() {
                 console.warn('[TokiSync:Worker] 팝업 포커스 신호 실패:', e.message);
             }
 
+            sendDiagnostics(queueId, 'start-before-captcha');
+
             // CF Challenge Check
             const isCloudflare = document.title.includes('Just a moment') ||
                                  document.getElementById('cf-challenge-running') ||
@@ -65,7 +159,9 @@ export function initWorkerExtractor() {
             
             if (isCloudflare) {
                 console.warn("⚠️ [TokiSync:Worker] 클라우드플레어 보안 챌린지 감지 - 대기 모드 진입");
-                sendToParent('CAPTCHA_DETECTED', { queueId });
+                const diagnostics = collectPageDiagnostics({}, { detectedBy: 'cloudflare' });
+                sendDiagnostics(queueId, 'captcha-detected', {}, { detectedBy: 'cloudflare' });
+                sendToParent('CAPTCHA_DETECTED', { queueId, diagnostics });
                 return;
             }
 
@@ -102,6 +198,7 @@ export function initWorkerExtractor() {
             // Reconstruct parser instance using injected matchedRule
             const parser = new GenericParser(protocolDomain || window.location.origin, matchedRule);
             const viewerCfg = parser.rule.viewer || {};
+            sendDiagnostics(queueId, 'start', viewerCfg, { targetType });
 
             try {
                 let blob = null;
@@ -164,9 +261,12 @@ export function initWorkerExtractor() {
                             content = ttsText.trim();
                             reportProgress(queueId, 50, WORKER_STAGE.PARSING);
                             console.log(`[TokiSync:Worker] ✅ Plan D(__novelTTSText) 본문 확보: ${content.length}자`);
+                        } else {
+                            sendDiagnostics(queueId, 'novel-tts-empty', viewerCfg);
                         }
                     } catch (e) {
                         console.warn('[TokiSync:Worker] Plan D 추출 예외(무시, 폴백 진행):', e.message);
+                        sendDiagnostics(queueId, 'novel-tts-error', viewerCfg, { error: e.message });
                     }
 
                     // --- Plan B (2순위): 닫힌 shadow DOM 본문 (index.js 선택적 force-open 전제) ---
@@ -206,6 +306,9 @@ export function initWorkerExtractor() {
                             }
                             await sleep(500);
                         }
+                        if (!content || content.trim().length < 100) {
+                            sendDiagnostics(queueId, 'novel-shadow-empty', viewerCfg);
+                        }
                     }
 
                     // --- Plan C (3순위): Decryption API ---
@@ -215,6 +318,7 @@ export function initWorkerExtractor() {
                     }
 
                     if (!content || content.trim().length < 100) {
+                        sendDiagnostics(queueId, 'novel-extraction-empty', viewerCfg);
                         throw new Error("소설 본문 추출에 실패했습니다. (Shadow DOM/API 복호화 무반응)");
                     }
 
@@ -259,6 +363,7 @@ export function initWorkerExtractor() {
                     const contentDoc = await waitForContent(window, Math.round(10000 * scanSpeedMultiplier), viewerCfg);
                     if (!contentDoc) {
                         console.warn("[TokiSync:Worker] 10초 내 콘텐츠 렌더링 미감지. 갈무리 강행.");
+                        sendDiagnostics(queueId, 'comic-content-timeout', viewerCfg);
                     }
 
                     // 1.5s DOM Stabilization delay
@@ -322,12 +427,20 @@ export function initWorkerExtractor() {
                     // Execute initial fetch & download
                     let finalImages = parser.getImageList(document);
                     console.log(`🎯 [TokiSync:Worker] 1차 이미지 주소 ${finalImages.length}개 추출 완료.`);
+                    sendDiagnostics(queueId, finalImages.length ? 'comic-image-list' : 'comic-image-list-empty', viewerCfg, {
+                        finalImageCount: finalImages.length,
+                        firstResolvedImage: finalImages[0] && finalImages[0].url ? finalImages[0].url : ''
+                    });
                     let downloadedData = await runImageDownloads(finalImages.map(img => img.url));
 
                     // Deep Fallback: Trigger 15s retry if >50% placeholder dummy detected
                     const suspiciousCount = downloadedData.filter(d => !d.data || d.size < 30000).length;
                     if (suspiciousCount > finalImages.length / 2) {
                         console.warn(`⚠️ [Deep Fallback] 다수 더미 파일 감지 (${suspiciousCount}/${finalImages.length}) - 15초 정밀 재스크롤 시도`);
+                        sendDiagnostics(queueId, 'comic-suspicious-dummy', viewerCfg, {
+                            suspiciousCount,
+                            finalImageCount: finalImages.length
+                        });
                         reportProgress(queueId, 35, WORKER_STAGE.SCROLLING);
                         await sleep(2000);
                         
