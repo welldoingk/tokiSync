@@ -552,6 +552,7 @@ export const runSchedulerOnce = async () => {
         try {
             // 기존 window.name을 다시 타겟으로 쓰면, 이전 릴레이에서 name이 바뀐 경우
             // 브라우저가 같은 창을 못 찾아 새 팝업을 만든다. 보관 중인 Window 참조를 직접 이동시킨다.
+            console.log(`[Queue Scheduler] location.replace로 팝업 리다이렉션 시도: ${nextItem.episodeUrl}`);
             if (recycledPopup.location && typeof recycledPopup.location.replace === 'function') {
                 recycledPopup.location.replace(nextItem.episodeUrl);
             } else {

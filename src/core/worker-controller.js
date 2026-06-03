@@ -7,7 +7,9 @@ import { fetchNovelTextViaApi } from './novel-decryptor.js';
 import { registerIpcListener, sendToWorker } from './ipc-broker.js';
 import { updateQueueItem, WORKER_STAGE, activeWorkers, getQueue, runSchedulerOnce } from './queue.js';
 import { LogBox } from './ui.js';
+import { EventBus, EVT } from './EventBus.js';
 import { getConfig } from './config.js';
+import { refreshCacheAfterUpload } from './gas.js';
 
 // Reference for the single worker popup (used in sequential mode)
 let activeWorkerRef = null;
@@ -205,7 +207,11 @@ async function fetchMediaViaWorkerSingleAttempt(episodeUrl, targetType = 'novel'
                 else if (stage === WORKER_STAGE.UPLOADING) stageText = payload.savedPath ? `${payload.destLabel || '드라이브'} 저장: ${payload.savedPath}` : '드라이브 저장';
                 else if (stage === WORKER_STAGE.COMPLETED) stageText = '완료';
 
-                logger.log(`[수집 진행] [${config.episodeTitle || '에피소드'}] -> ${stageText} (${Math.round(percent)}%)`, 'Downloader');
+                EventBus.emit(EVT.LOG, {
+                    msg: `[수집 진행] [${config.episodeTitle || '에피소드'}] -> ${stageText} (${Math.round(percent)}%)`,
+                    tag: 'Downloader',
+                    level: 'info'
+                });
             }
 
             // 4. Task completed successfully
@@ -361,7 +367,7 @@ export async function fetchComicImages(episodeUrl, config = {}) {
  */
 export function initBatchWorkerController() {
     const logger = LogBox.getInstance();
-    
+
     if (window.tokisync_batch_controller_initialized) return;
     window.tokisync_batch_controller_initialized = true;
 
@@ -392,7 +398,11 @@ export function initBatchWorkerController() {
                             retryCount: nextRetry,
                             errorMsg: '자식 팝업 창이 비정상적으로 강제 종료되었습니다.'
                         });
-                        logger.error(`❌ [배치 수동종료] [${item.episodeTitle}] 자식 팝업이 종료되어 복구를 단행합니다.`, 'Queue');
+                        EventBus.emit(EVT.LOG, {
+                            msg: `❌ [배치 수동종료] [${item.episodeTitle}] 자식 팝업이 종료되어 복구를 단행합니다.`,
+                            tag: 'Queue',
+                            level: 'error'
+                        });
                         if (nextRetry >= 3) kickRemotePoll('worker-finished', id);
                         runSchedulerOnce();
                     }
@@ -520,7 +530,7 @@ export function initBatchWorkerController() {
                         novelFormat: item.novelFormat || 'epub',
                         matchedRule: item.matchedRule || {},
                         protocolDomain: item.protocolDomain || window.location.origin,
-                        scanSpeedMultiplier: getConfig().scanSpeed,
+                        scanSpeedMultiplier: getConfig().scanSpeed / 750,
                         localNameTemplate: getConfig().localNameTemplate || "{number} - {title}",
                         localEpisodePadding: getConfig().localEpisodePadding || "4",
                         cover: item.cover || '',
@@ -548,7 +558,11 @@ export function initBatchWorkerController() {
                 const queue = getQueue();
                 const item = queue.find(i => i.id === matchedId);
                 if (item) {
-                    logger.log(`⚠️ [캡차 대기] [${item.episodeTitle}] 브라우저 창에서 보안 해제를 수행해 주세요.`, 'Downloader');
+                    EventBus.emit(EVT.LOG, {
+                        msg: `⚠️ [캡차 대기] [${item.episodeTitle}] 브라우저 창에서 보안 해제를 수행해 주세요.`,
+                        tag: 'Downloader',
+                        level: 'warn'
+                    });
                 }
             }
         }
@@ -603,8 +617,12 @@ export function initBatchWorkerController() {
                     else if (stage === WORKER_STAGE.UPLOADING) stageText = payload.savedPath ? `${payload.destLabel || '드라이브'} 저장: ${payload.savedPath}` : '드라이브 저장';
                     else if (stage === WORKER_STAGE.COMPLETED) stageText = '완료';
 
-                    logger.log(`[수집 진행] [${item.episodeTitle}] -> ${stageText} (${Math.round(percent)}%)`, 'Downloader');
-                    logger.updateProgressUI();
+                    EventBus.emit(EVT.LOG, {
+                        msg: `[수집 진행] [${item.episodeTitle}] -> ${stageText} (${Math.round(percent)}%)`,
+                        tag: 'Downloader',
+                        level: 'info'
+                    });
+                    EventBus.emit(EVT.UPDATE_PROGRESS);
                 }
             }
         }
@@ -642,6 +660,24 @@ export function initBatchWorkerController() {
                 updateQueueItem(matchedId, { status: 'completed', progressPercent: 100, stage: WORKER_STAGE.COMPLETED });
                 logger.updateProgressUI();
                 kickRemotePoll('worker-finished', matchedId);
+                EventBus.emit(EVT.UPDATE_PROGRESS);
+
+                // [배치 최종 갱신] 전 대기열 수집 완료 시 원격 드라이브 캐시 최종 갱신 수행
+                const currentQueue = getQueue();
+                const hasActive = currentQueue.some(i => i.status === 'pending' || i.status === 'processing');
+                if (!hasActive) {
+                    const completedItem = currentQueue.find(i => i.id === matchedId);
+                    if (completedItem && completedItem.destination === 'drive') {
+                        console.log(`[WorkerController] ☁️ 전 대기열 수집 완료 -> 드라이브 캐시 갱신 시작: ${completedItem.rootFolder}`);
+                        refreshCacheAfterUpload(
+                            completedItem.rootFolder,
+                            completedItem.category,
+                            completedItem.seriesMetadata || {}
+                        ).catch(e =>
+                            console.warn(`[WorkerController] 캐시 갱신 실패: ${e.message}`)
+                        );
+                    }
+                }
 
                 // 다음 대기 항목 릴레이 스케줄링
                 runSchedulerOnce();
@@ -686,8 +722,26 @@ export function initBatchWorkerController() {
                         errorMsg: errorMsg || '자식 워커가 에러를 보고함'
                     });
                     logger.updateProgressUI();
+                    EventBus.emit(EVT.UPDATE_PROGRESS);
                     if (nextRetry >= 3) {
                         kickRemotePoll('worker-finished', matchedId);
+                    }
+                }
+
+                // [배치 최종 갱신] 실패 상황이더라도 전 대기열 수집이 완전히 종료되면 캐시 갱신 수행
+                const currentQueue = getQueue();
+                const hasActive = currentQueue.some(i => i.status === 'pending' || i.status === 'processing');
+                if (!hasActive) {
+                    const failedItem = currentQueue.find(i => i.id === matchedId);
+                    if (failedItem && failedItem.destination === 'drive') {
+                        console.log(`[WorkerController] ☁️ 전 대기열 수집 종료(실패 포함) -> 드라이브 캐시 갱신 시작: ${failedItem.rootFolder}`);
+                        refreshCacheAfterUpload(
+                            failedItem.rootFolder,
+                            failedItem.category,
+                            failedItem.seriesMetadata || {}
+                        ).catch(e =>
+                            console.warn(`[WorkerController] 캐시 갱신 실패: ${e.message}`)
+                        );
                     }
                 }
 

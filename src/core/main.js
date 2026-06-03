@@ -1,6 +1,6 @@
 import { tokiDownload, processItem } from './downloader.js';
 import { detectSite, getMaxEpisodes, parseEpisodeRange } from './detector.js'; 
-import { showConfigModal, getConfig, setConfig, isConfigValid } from './config.js';
+import { getConfig, setConfig, isConfigValid } from './config.js';
 import { LogBox, markDownloadedItems, MenuModal, TreeRuleEditor } from './ui.js';
 import { extractEpisodeData } from './extractor.js';
 import { EpubBuilder } from './epub.js';
@@ -152,7 +152,7 @@ export async function main() {
 
     // -- 1. GM Menus (Must be registered early to prevent deadlocks) --
     if (typeof GM_registerMenuCommand !== 'undefined') {
-        GM_registerMenuCommand('⚙️ 설정 (Settings)', () => showConfigModal());
+        GM_registerMenuCommand('⚙️ 설정 (Settings)', () => logger.openDashboard('settings'));
         GM_registerMenuCommand('🌐 Viewer 열기', openViewer);
     }
 
@@ -172,6 +172,12 @@ export async function main() {
 
     const syncHistory = async () => {
         if (isSyncing) return;
+        
+        const config = getConfig();
+        if (config.policy !== 'drive') {
+            return; // 드라이브 저장 정책이 아닐 경우 이력 동기화 무시 (로컬 스탠드얼론 최적화)
+        }
+
         isSyncing = true;
         try {
             const parser = await ParserFactory.getParser();
@@ -238,7 +244,6 @@ export async function main() {
             tokiDownload(spec, config.policy, forceOverwrite);
         },
         openViewer: openViewer,
-        openSettings: (popupDoc) => showConfigModal(popupDoc),
         toggleLog: () => logger.toggle(),
         getConfig: getConfig,
         setConfig: setConfig,
@@ -340,8 +345,11 @@ export async function main() {
                     num: metadata.episodeNum || "0000"
                 };
 
+                const config = getConfig();
+                const destination = (config.policy === 'native') ? 'native' : (config.policy === 'drive' ? 'drive' : 'local');
+
                 // 4. 단건 다운로드 실행 (현재 페이지의 document를 직접 전달)
-                await processItem(tempItem, builder, siteInfo, null, parser, seriesTitle, document);
+                await processItem(tempItem, builder, siteInfo, null, parser, seriesTitle, document, "", destination);
 
                 // 5. 파일 생성 및 저장
                 logger.log('💾 파일 생성 및 저장 중...', 'System');

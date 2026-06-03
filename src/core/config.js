@@ -25,6 +25,15 @@ export const CFG_SCAN_SPEED = "TOKI_SCAN_SPEED";
 export const CFG_LOCAL_NAME_TEMPLATE = "TOKI_LOCAL_NAME_TEMPLATE";
 export const CFG_LOCAL_EPISODE_PADDING = "TOKI_LOCAL_EPISODE_PADDING";
 
+export function normalizeScanSpeed(value) {
+    let val = parseFloat(value);
+    if (!Number.isFinite(val)) val = 1000;
+    if (val <= 10) {
+        val *= 1000;
+    }
+    return Math.round(val);
+}
+
 /**
  * Get current configuration
  * @returns {{gasId: string, gasUrl: string, folderId: string, policy: string, apiKey: string, sleepMode: string, smartSkipRatio: number}}
@@ -70,8 +79,8 @@ export function getConfig() {
         webdavUrl: GM_getValue(CFG_WEBDAV_URL, ""),
         webdavUser: GM_getValue(CFG_WEBDAV_USER, ""),
         webdavPass: GM_getValue(CFG_WEBDAV_PASS, ""),
-        // [upstream develop] 스캔 속도 + 로컬 명명 템플릿
-        scanSpeed: parseFloat(GM_getValue(CFG_SCAN_SPEED, "1.0")),
+        // [upstream develop] 스캔 속도(ms) + 로컬 명명 템플릿
+        scanSpeed: normalizeScanSpeed(GM_getValue(CFG_SCAN_SPEED, "1000")),
         localNameTemplate: GM_getValue(CFG_LOCAL_NAME_TEMPLATE, "{number} - {title}"),
         localEpisodePadding: GM_getValue(CFG_LOCAL_EPISODE_PADDING, "4")
     };
@@ -202,14 +211,14 @@ export function showConfigModal(popupDoc = document) {
             </div>
 
             <div class="toki-control-group">
-                <label class="toki-label">이미지 스캔 속도 배율
-                    <span id="toki-scan-speed-val">${config.scanSpeed.toFixed(1)}×</span>
+                <label class="toki-label">이미지 스캔 속도
+                    <span id="toki-scan-speed-val">${config.scanSpeed}ms</span>
                 </label>
                 <input type="range" id="toki-cfg-scanspeed" 
-                       min="0.5" max="5.0" step="0.5" value="${config.scanSpeed}"
+                       min="100" max="5000" step="100" value="${config.scanSpeed}"
                        class="toki-range" style="width: 100%;">
                 <div class="toki-hint" style="font-size: 11px; color: #888; margin-top: 4px;">
-                    0.5×(빠름/불안정) ─ 1.0×(기본) ─ 3.0×(안정) ─ 5.0×(확실)
+                    100ms(빠름/불안정) ─ 1000ms(기본/권장) ─ 3000ms(안정) ─ 5000ms(확실)
                 </div>
             </div>
 
@@ -274,7 +283,7 @@ export function showConfigModal(popupDoc = document) {
     if (scanSpeedSlider) {
         scanSpeedSlider.oninput = (e) => {
             const valSpan = doc.getElementById('toki-scan-speed-val');
-            if (valSpan) valSpan.innerText = `${parseFloat(e.target.value).toFixed(1)}×`;
+            if (valSpan) valSpan.innerText = `${e.target.value}ms`;
         };
     }
 

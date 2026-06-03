@@ -2,13 +2,18 @@ const path = require('path');
 const webpack = require('webpack');
 const fs = require('fs');
 const TerserPlugin = require('terser-webpack-plugin');
+const pkg = require('./package.json');
+const components = pkg.components || {};
+const scriptVersion = components.script || pkg.version;
+const viewerVersion = components.viewer || pkg.version;
+const gasVersion = components.gas || pkg.version;
 
 // Metadata Block
 const METADATA_MAIN = `// ==UserScript==
-// @name         TokiSync (Link to Drive) [LAN Custom v1.21]
+// @name         TokiSync (Link to Drive) [LAN Custom v1.22]
 // @namespace    local://lan/tokisync-custom
-// @version      1.21.5-multi.260603-21
-// @description  Toki series sites -> NAS/Drive syncing (Bundled) — LAN custom: 멀티-IP lease + 네이티브 NAS(WebDAV) on upstream v1.21.5
+// @version      ${scriptVersion}
+// @description  Toki series sites -> NAS/Drive syncing (Bundled) — LAN custom: 멀티-IP lease + 네이티브 NAS(WebDAV) on upstream v1.22.0
 // @author       pray4skylark + local patch
 // @updateURL    http://192.168.0.100:8765/docs/tokiSync.user.js
 // @downloadURL  http://192.168.0.100:8765/docs/tokiSync.user.js
@@ -127,6 +132,11 @@ module.exports = {
     ],
   },
   plugins: [
+    new webpack.DefinePlugin({
+      __SCRIPT_VERSION__: JSON.stringify(scriptVersion),
+      __VIEWER_VERSION__: JSON.stringify(viewerVersion),
+      __GAS_VERSION__: JSON.stringify(gasVersion)
+    }),
     new webpack.BannerPlugin({
       banner: METADATA_MAIN,
       raw: true,

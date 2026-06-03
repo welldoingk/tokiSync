@@ -1,6 +1,12 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import path from 'path';
+import fs from 'fs';
+
+const pkg = JSON.parse(
+  fs.readFileSync(new URL('./package.json', import.meta.url), 'utf-8')
+);
+const components = pkg.components || {};
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
@@ -23,6 +29,12 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [vue()],
+    
+    define: {
+      __SCRIPT_VERSION__: JSON.stringify(components.script || pkg.version),
+      __VIEWER_VERSION__: JSON.stringify(components.viewer || pkg.version),
+      __GAS_VERSION__: JSON.stringify(components.gas || pkg.version)
+    },
     
     // index.html 위치 (사용자 설정 유지)
     root: './src/viewer', 

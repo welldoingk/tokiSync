@@ -505,9 +505,10 @@ export async function getImageDimensions(blob) {
  * [v1.8.4] GM_xmlhttpRequest 기반의 안전한 Blob Fetcher
  * 브라우저 fetch()로 인해 발생하는 CORS 및 Referer 차단을 우회합니다.
  * @param {string} url 
+ * @param {string} [referer]
  * @returns {Promise<Blob>}
  */
-export async function fetchBlobWithXHR(url) {
+export async function fetchBlobWithXHR(url, referer) {
     // 35초 절대 강제 타임아웃 프로미스 정의 (CORS/샌드박스 먹통 상황 방어용 극약 처방)
     let timeoutTimer = null;
     const forceTimeoutPromise = new Promise((_, reject) => {
@@ -523,7 +524,7 @@ export async function fetchBlobWithXHR(url) {
             try {
                 const resp = await fetch(url, {
                     mode: 'cors',
-                    credentials: 'omit'
+                    credentials: 'include'
                 });
                 if (!resp.ok) throw new Error(`HTTP status ${resp.status}`);
                 return await resp.blob();
@@ -538,7 +539,7 @@ export async function fetchBlobWithXHR(url) {
                     method: 'GET',
                     url: url,
                     headers: {
-                        "Referer": window.location.origin,
+                        "Referer": referer || window.location.href,
                         "User-Agent": navigator.userAgent
                     },
                     responseType: 'blob',
@@ -552,7 +553,7 @@ export async function fetchBlobWithXHR(url) {
                     },
                     onerror: (err) => {
                         console.warn('[TokiSync Utils] GM_xmlhttpRequest 오류 감지. fetch 폴백을 발동합니다:', url);
-                        fetch(url, { mode: 'cors', credentials: 'omit' })
+                        fetch(url, { mode: 'cors', credentials: 'include' })
                             .then(r => {
                                 if (!r.ok) throw new Error(`HTTP status ${r.status}`);
                                 return r.blob();
@@ -562,7 +563,7 @@ export async function fetchBlobWithXHR(url) {
                     },
                     ontimeout: () => {
                         console.warn('[TokiSync Utils] GM_xmlhttpRequest 25초 타임아웃. fetch 폴백 시도:', url);
-                        fetch(url, { mode: 'cors', credentials: 'omit' })
+                        fetch(url, { mode: 'cors', credentials: 'include' })
                             .then(r => {
                                 if (!r.ok) throw new Error(`HTTP status ${r.status}`);
                                 return r.blob();
@@ -573,7 +574,7 @@ export async function fetchBlobWithXHR(url) {
                 });
             } catch (e) {
                 console.error('[TokiSync Utils] GM_xmlhttpRequest 호출 중 예외 발생, 일반 fetch로 긴급 우회:', e);
-                fetch(url, { mode: 'cors', credentials: 'omit' })
+                fetch(url, { mode: 'cors', credentials: 'include' })
                     .then(r => {
                         if (!r.ok) throw new Error(`HTTP status ${r.status}`);
                         return r.blob();

@@ -333,7 +333,7 @@ export function initWorkerExtractor() {
                     let coverObj = null;
                     if (cover && configNovelFormat !== 'txt') {
                         try {
-                            const cb = await fetchBlobWithXHR(cover);
+                            const cb = await fetchBlobWithXHR(cover, window.location.href);
                             if (cb && cb.size > 0) coverObj = { blob: cb, type: cb.type || 'image/jpeg' };
                         } catch (e) {
                             console.warn(`[TokiSync:Worker] 표지 다운로드 실패(무시): ${e.message}`);
@@ -389,7 +389,7 @@ export function initWorkerExtractor() {
                             const chunkPromises = chunk.map(async (url, index) => {
                                 const globalIndex = i + index;
                                 try {
-                                    const imgBlob = await fetchBlobWithXHR(url);
+                                    const imgBlob = await fetchBlobWithXHR(url, window.location.href);
                                     const arrayBuffer = await blobToArrayBuffer(imgBlob);
                                     processedCount++;
 

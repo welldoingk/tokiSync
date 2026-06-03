@@ -5,6 +5,7 @@
 
 import { startSilentAudio, stopSilentAudio, isAudioRunning } from './anti_sleep.js';
 import { getConfig, setConfig, getRemoteConfig } from './config.js';
+import { EventBus, EVT } from './EventBus.js';
 import { ParserFactory } from './parsers/ParserFactory.js';
 import { RuleManager } from './parsers/RuleManager.js';
 import { GenericParser } from './parsers/GenericParser.js';
@@ -36,15 +37,44 @@ export class LogBox {
             }
         }
 
+        // ── EventBus 구독 등록 ───────────────────────────────
+        EventBus.on(EVT.NOTIFY_ERROR, ({ msg }) => {
+            if (this.popupWindow && !this.popupWindow.closed) {
+                this.popupWindow.alert(msg);
+            } else {
+                alert(msg);
+            }
+        });
+
+        EventBus.on(EVT.LOG, ({ msg, tag, level }) => {
+            if (level === 'error') {
+                this.error(msg, tag);
+            } else if (level === 'warn') {
+                this.warn(msg, tag);
+            } else if (level === 'success') {
+                this.success(msg, tag);
+            } else {
+                this.log(msg, 'normal', tag);
+            }
+        });
+
+        EventBus.on(EVT.UPDATE_PROGRESS, () => {
+            this.updateProgressUI();
+        });
+        // ─────────────────────────────────────────────────────
+
         // 📊 [멀티큐] 팝업이 켜져 있을 때 주기적인 1초 동기화
         setInterval(() => {
             this.updateProgressUI();
         }, 1000);
     }
 
-    openDashboard() {
+    openDashboard(defaultTab = '') {
         if (this.popupWindow && !this.popupWindow.closed) {
             this.popupWindow.focus();
+            if (defaultTab) {
+                this.switchTab(defaultTab);
+            }
             return;
         }
 
@@ -150,6 +180,9 @@ export class LogBox {
         }
 
         this.updateProgressUI();
+        if (defaultTab) {
+            this.switchTab(defaultTab);
+        }
     }
 
     updateProgressUI() {
@@ -321,7 +354,7 @@ export class LogBox {
             if (logContentEl) {
                 const li = doc.createElement('li');
                 li.textContent = fullMsg;
-                
+
                 // 클래스 매핑
                 if (type === 'error' || type === 'critical') li.className = 'error';
                 else if (type === 'success') li.className = 'success';
@@ -384,6 +417,15 @@ export class LogBox {
             this.hide();
         } else {
             this.show();
+        }
+    }
+
+    switchTab(tabName) {
+        if (!this.popupWindow || this.popupWindow.closed) return;
+        const doc = this.popupWindow.document;
+        const tabBtn = doc.querySelector(`.toki-tab-btn[data-tab="${tabName}"]`);
+        if (tabBtn) {
+            tabBtn.click();
         }
     }
 }
@@ -471,23 +513,7 @@ export class MenuModal {
 
                 <!-- 2. Settings Tab -->
                 <div class="toki-tab-content" id="toki-tab-settings">
-                    <div class="toki-section-title toki-mt-0">Cloud & Storage</div>
-                    <div class="toki-control-group">
-                        <label class="toki-label">GAS Script ID</label>
-                        <input type="text" id="toki-sel-gas-id" class="toki-input" placeholder="AKfycb...">
-                    </div>
-
-                    <div class="toki-control-group">
-                        <label class="toki-label">Google Drive Folder ID</label>
-                        <input type="text" id="toki-sel-folder-id" class="toki-input" placeholder="Folder ID">
-                    </div>
-
-                    <div class="toki-control-group">
-                        <label class="toki-label">API Key (보안)</label>
-                        <input type="password" id="toki-sel-apikey" class="toki-input" placeholder="API Key">
-                    </div>
-
-                    <div class="toki-section-title">Download Policies</div>
+                    <div class="toki-section-title toki-mt-0">Download Policies</div>
                     <div class="toki-control-group">
                         <label class="toki-label">저장 정책</label>
                         <select id="toki-sel-policy" class="toki-select">
@@ -582,12 +608,12 @@ export class MenuModal {
                     </div>
 
                     <div class="toki-control-group">
-                        <label class="toki-label">이미지 스캔 속도 배율
-                            <span id="toki-scan-speed-val" style="font-weight: bold; color: var(--toki-primary, #6366f1);">1.0×</span>
+                        <label class="toki-label">이미지 스캔 속도
+                            <span id="toki-scan-speed-val" style="font-weight: bold; color: var(--toki-primary, #6366f1);">1000ms</span>
                         </label>
-                        <input type="range" id="toki-sel-scanspeed" min="0.5" max="5.0" step="0.5" value="1.0" class="toki-range" style="width: 100%;">
+                        <input type="range" id="toki-sel-scanspeed" min="100" max="5000" step="100" value="1000" class="toki-range" style="width: 100%;">
                         <div class="toki-hint" style="font-size: 11px; color: #888; margin-top: 4px;">
-                            0.5×(빠름/불안정) ─ 1.0×(기본) ─ 3.0×(안정) ─ 5.0×(확실)
+                            100ms(빠름/불안정) ─ 1000ms(기본/권장) ─ 3000ms(안정) ─ 5000ms(확실)
                         </div>
                     </div>
 
@@ -627,6 +653,22 @@ export class MenuModal {
                     <div class="toki-control-group">
                         <label class="toki-label">커스텀 파싱 룰 (JSON Array)</label>
                         <textarea id="toki-sel-custom-rule" class="toki-textarea toki-textarea-code" placeholder="[{...}]" style="min-height: 100px;"></textarea>
+                    </div>
+
+                    <div class="toki-section-title">Cloud & Storage</div>
+                    <div class="toki-control-group">
+                        <label class="toki-label">GAS Script ID</label>
+                        <input type="text" id="toki-sel-gas-id" class="toki-input" placeholder="AKfycb...">
+                    </div>
+
+                    <div class="toki-control-group">
+                        <label class="toki-label">Google Drive Folder ID</label>
+                        <input type="text" id="toki-sel-folder-id" class="toki-input" placeholder="Folder ID">
+                    </div>
+
+                    <div class="toki-control-group">
+                        <label class="toki-label">API Key (보안)</label>
+                        <input type="password" id="toki-sel-apikey" class="toki-input" placeholder="API Key">
                     </div>
 
                     <div class="toki-control-group toki-mt-24 toki-mb-24">
@@ -850,9 +892,13 @@ export class MenuModal {
             if (selLocalPadding) selLocalPadding.value = cfg.localEpisodePadding !== undefined ? String(cfg.localEpisodePadding) : '4';
             if (selSpeed) selSpeed.value = cfg.sleepMode || 'agile';
             if (selScanSpeed) {
-                selScanSpeed.value = cfg.scanSpeed !== undefined ? String(cfg.scanSpeed) : '1.0';
+                selScanSpeed.value = cfg.scanSpeed !== undefined ? String(cfg.scanSpeed) : '1000';
                 const valSpan = doc.getElementById('toki-scan-speed-val');
-                if (valSpan) valSpan.innerText = `${parseFloat(selScanSpeed.value).toFixed(1)}×`;
+                if (valSpan) valSpan.innerText = `${selScanSpeed.value}ms`;
+                
+                selScanSpeed.oninput = (e) => {
+                    if (valSpan) valSpan.innerText = `${e.target.value}ms`;
+                };
             }
             if (selNovelFormat) selNovelFormat.value = cfg.novelFormat || 'epub';
             if (selNovelTerm) selNovelTerm.value = cfg.novelMode || 'perChapter';
@@ -1039,7 +1085,7 @@ export class MenuModal {
         const showProgressBtn = doc.getElementById('toki-btn-show-progress');
         const progressModal = doc.getElementById('toki-modal-progress');
         const closeProgressBtn = doc.getElementById('toki-btn-modal-progress-close');
-        
+
         if (showProgressBtn && progressModal) {
             showProgressBtn.onclick = () => {
                 progressModal.style.display = 'flex';
@@ -1080,6 +1126,75 @@ export class MenuModal {
             };
         }
 
+        // 8. Settings Save Handler (통합 대시보드 전용 저장 연동)
+        const saveSettingsBtn = doc.getElementById('toki-btn-save-settings');
+        if (saveSettingsBtn) {
+            saveSettingsBtn.onclick = () => {
+                const newCustomRule = selCustomRule ? (selCustomRule.value.trim() || '[]') : '[]';
+                let validCustomRule = '[]';
+
+                try {
+                    let parsed = JSON.parse(newCustomRule);
+                    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                        if (Array.isArray(parsed.rules)) {
+                            parsed = parsed.rules;
+                        } else {
+                            throw new Error("커스텀 룰은 JSON 배열이거나, 'rules' 키를 포함한 객체여야 합니다.");
+                        }
+                    }
+                    if (!Array.isArray(parsed)) {
+                        throw new Error("커스텀 룰은 JSON 배열(Array) 형태여야 합니다.");
+                    }
+                    validCustomRule = JSON.stringify(parsed, null, 2);
+                } catch (e) {
+                    popupWindow.alert(`커스텀 룰 JSON 파싱 오류:\n${e.message}\n설정을 저장할 수 없습니다.`);
+                    return;
+                }
+
+                const newGasId = selGasId ? selGasId.value.trim() : '';
+                const newFolder = selFolderId ? selFolderId.value.trim() : '';
+                const newApiKey = selApiKey ? selApiKey.value.trim() : '';
+                const newPolicy = selPolicy ? selPolicy.value : 'individual';
+                const newNameTemplate = selNameTemplate ? selNameTemplate.value.trim() || "{number} - {title}" : "{number} - {title}";
+                const newLocalPadding = selLocalPadding ? selLocalPadding.value : '4';
+                const newSleepMode = selSpeed ? selSpeed.value : 'agile';
+                const newScanSpeed = selScanSpeed ? selScanSpeed.value : '1000';
+                const newNovelFormat = selNovelFormat ? selNovelFormat.value : 'epub';
+                const newNovelMode = selNovelTerm ? selNovelTerm.value : 'perChapter';
+                const newSmartSkip = selSmartSkip ? selSmartSkip.value : '50';
+                // URL 입력 시 ID 추출 로직 병합
+                let finalGasId = newGasId;
+                const urlMatch = newGasId.match(/\/s\/([^\/]+)\/exec/);
+                if (urlMatch) finalGasId = urlMatch[1];
+
+                if (this.handlers.setConfig) {
+                    this.handlers.setConfig('TOKI_GAS_ID', finalGasId);
+                    this.handlers.setConfig('TOKI_FOLDER_ID', newFolder);
+                    this.handlers.setConfig('TOKI_API_KEY', newApiKey);
+                    this.handlers.setConfig('TOKI_DOWNLOAD_POLICY', newPolicy);
+                    this.handlers.setConfig('TOKI_LOCAL_NAME_TEMPLATE', newNameTemplate);
+                    this.handlers.setConfig('TOKI_LOCAL_EPISODE_PADDING', newLocalPadding);
+                    this.handlers.setConfig('TOKI_SLEEP_MODE', newSleepMode);
+                    this.handlers.setConfig('TOKI_SCAN_SPEED', newScanSpeed);
+                    this.handlers.setConfig('TOKI_NOVEL_FORMAT', newNovelFormat);
+                    this.handlers.setConfig('TOKI_NOVEL_MODE', newNovelMode);
+                    this.handlers.setConfig('TOKI_SMART_SKIP_RATIO', newSmartSkip);
+                    this.handlers.setConfig('TOKI_REMOTE_RULE_URL', selRemoteRule ? selRemoteRule.value.trim() : '');
+                    this.handlers.setConfig('TOKI_CUSTOM_RULES', validCustomRule);
+                    this.handlers.setConfig('TOKI_WEBDAV_URL', selWebdavUrl ? selWebdavUrl.value.trim() : '');
+                    this.handlers.setConfig('TOKI_WEBDAV_USER', selWebdavUser ? selWebdavUser.value : '');
+                    this.handlers.setConfig('TOKI_WEBDAV_PASS', selWebdavPass ? selWebdavPass.value : '');
+                    this.handlers.setConfig('TOKI_REMOTE_ENABLED', selRemoteEnabled && selRemoteEnabled.checked ? '1' : '0');
+                    this.handlers.setConfig('TOKI_REMOTE_API_URL', selRemoteUrl ? selRemoteUrl.value.trim() : '');
+                    this.handlers.setConfig('TOKI_REMOTE_API_TOKEN', selRemoteToken ? selRemoteToken.value : '');
+                    this.handlers.setConfig('TOKI_REMOTE_POLL_SEC', selRemotePoll ? selRemotePoll.value : '5');
+                    this.handlers.setConfig('TOKI_REMOTE_CLIENT_ID', selRemoteClientId ? selRemoteClientId.value.trim() : '');
+                    this.handlers.setConfig('TOKI_REMOTE_LEASE_MAX', selRemoteLeaseMax ? selRemoteLeaseMax.value : '2');
+                }
+
+                popupWindow.alert('설정이 저장되었습니다.');
+            };
+        }
 
     }
 
@@ -1190,7 +1305,8 @@ export class TreeRuleEditor {
             'container': '목록 전체를 감싸는 부모 요소',
             'item': '각 회차 줄 요소 (li 등)',
             'viewer': '본문 내용을 추출하는 규칙 그룹',
-            'images': '웹툰 이미지 또는 소설 본문 요소'
+            'images': '웹툰 이미지 또는 소설 본문 요소',
+            'exclude': '제외할 요소의 CSS 셀렉터 (반점 구분 또는 배열)'
         };
     }
 
@@ -1199,7 +1315,7 @@ export class TreeRuleEditor {
         this.overlay = doc.createElement('div');
         this.overlay.className = 'toki-modal-overlay';
         // z-index handled by .toki-tree-modal in ui.css
-        
+
         this.overlay.innerHTML = `
             <div class="toki-modal toki-tree-modal">
                 <div class="toki-modal-header">
@@ -1377,9 +1493,26 @@ export class TreeRuleEditor {
                 name: '새 사이트',
                 urlPattern: '',
                 category: 'Webtoon',
-                meta: { title: { selector: '' } },
-                list: { container: '', item: '' },
-                viewer: { images: { selector: '' } }
+                meta: {
+                    title: 'h1.title',
+                    author: 'span.author',
+                    thumb: { selector: 'div.thumb > img', attr: 'src' }
+                },
+                list: {
+                    container: 'ul.list',
+                    item: 'li.item',
+                    num: 'span.no',
+                    title: 'a.link',
+                    link: { selector: 'a.link', attr: 'href' }
+                },
+                viewer: {
+                    fetchMethod: 'iframe',
+                    imageRegex: 'https?:\\\\/\\\\/[a-zA-Z0-9_\\\\.\\\\/-]+\\\\.(?:jpg|png|webp|gif)',
+                    imageContainer: 'div.viewer',
+                    imageItem: 'img',
+                    lazyAttrOptions: ['data-src', 'src'],
+                    exclude: ''
+                }
             });
             this.render();
         };
@@ -1591,7 +1724,8 @@ export class FormRuleEditor {
                 imageRegex: 'https?:\\\\/\\\\/[a-zA-Z0-9_\\\\.\\\\/-]+\\\\.(?:jpg|png|webp|gif)',
                 imageContainer: 'div.viewer',
                 imageItem: 'img',
-                lazyAttrOptions: ['data-src', 'src']
+                lazyAttrOptions: ['data-src', 'src'],
+                exclude: ''
             }
         };
     }
@@ -1612,10 +1746,11 @@ export class FormRuleEditor {
     }
 
     render() {
+        const scriptVer = typeof __SCRIPT_VERSION__ !== 'undefined' ? __SCRIPT_VERSION__ : '1.22.0';
         this.overlay.innerHTML = `
             <div class="toki-modal toki-form-editor-modal">
                 <div class="toki-modal-header">
-                    <div class="toki-modal-title">📝 간편 규칙 편집기 (Form Editor) <span class="toki-text-xs">v1.21.0</span></div>
+                    <div class="toki-modal-title">📝 간편 규칙 편집기 (Form Editor) <span class="toki-text-xs">v${scriptVer}</span></div>
                     <div class="toki-flex-row-8">
                         <button class="toki-btn-rule" id="form-btn-export">📤 내보내기</button>
                         <button class="toki-btn-rule" id="form-btn-import">📥 가져오기</button>
@@ -1791,6 +1926,18 @@ export class FormRuleEditor {
                                     <input type="text" id="rule-viewer-lazyAttrOptions" class="toki-input-compact" placeholder="예: data-src, data-lazy, src">
                                 </div>
                             </div>
+                            <div class="toki-form-grid">
+                                <div class="toki-form-row" style="grid-column: span 2;">
+                                    <div class="toki-form-row-header">
+                                        <span class="toki-form-row-label">제외 셀렉터 (exclude) (반점 구분)</span>
+                                        <span class="toki-form-dropper-btn" data-target="rule-viewer-exclude" title="화면에서 스포이드로 선택">🎯</span>
+                                    </div>
+                                    <div class="toki-flex-row-8">
+                                        <input type="text" id="rule-viewer-exclude" class="toki-input-compact toki-flex-1" placeholder="예: .ad-banner, #sponsored-bottom">
+                                        <span class="toki-badge-match zero" id="match-rule-viewer-exclude">0</span>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -1849,6 +1996,10 @@ export class FormRuleEditor {
         this.setValue('rule-viewer-imageContainer', rule.viewer?.imageContainer || '');
         this.setValue('rule-viewer-imageItem', rule.viewer?.imageItem || '');
         this.setValue('rule-viewer-lazyAttrOptions', Array.isArray(rule.viewer?.lazyAttrOptions) ? rule.viewer.lazyAttrOptions.join(', ') : '');
+        
+        const excludeRule = rule.viewer?.exclude || rule.viewer?.remove || '';
+        const excludeStr = Array.isArray(excludeRule) ? excludeRule.join(', ') : excludeRule;
+        this.setValue('rule-viewer-exclude', excludeStr);
 
         this.updateJsonPreview();
         this.runRealtimeDomMatchCount();
@@ -1895,6 +2046,9 @@ export class FormRuleEditor {
         };
 
         const lazyStr = this.getValue('rule-viewer-lazyAttrOptions');
+        const excludeStr = this.getValue('rule-viewer-exclude');
+        const excludeArray = excludeStr ? excludeStr.split(',').map(s => s.trim()).filter(s => s) : [];
+
         rule.viewer = {
             fetchMethod: this.getValue('rule-viewer-fetchMethod'),
             imageRegex: rule.viewer?.imageRegex || 'https?:\\\\/\\\\/[a-zA-Z0-9_\\\\.\\\\/-]+\\\\.(?:jpg|png|webp|gif)',
@@ -1902,6 +2056,14 @@ export class FormRuleEditor {
             imageItem: this.getValue('rule-viewer-imageItem'),
             lazyAttrOptions: lazyStr ? lazyStr.split(',').map(s => s.trim()) : []
         };
+
+        if (excludeArray.length > 0) {
+            rule.viewer.exclude = excludeArray;
+            if (rule.viewer.remove) delete rule.viewer.remove;
+        } else {
+            if (rule.viewer.exclude) delete rule.viewer.exclude;
+            if (rule.viewer.remove) delete rule.viewer.remove;
+        }
 
         const editor = this.overlay.querySelector('#form-json-editor');
         if (editor) {
@@ -1919,7 +2081,8 @@ export class FormRuleEditor {
             'rule-list-link-selector',
             'rule-list-title',
             'rule-viewer-imageContainer',
-            'rule-viewer-imageItem'
+            'rule-viewer-imageItem',
+            'rule-viewer-exclude'
         ];
 
         selectors.forEach(id => {
@@ -2112,6 +2275,10 @@ export class FormRuleEditor {
         this.setValue('rule-viewer-imageContainer', rule.viewer?.imageContainer || '');
         this.setValue('rule-viewer-imageItem', rule.viewer?.imageItem || '');
         this.setValue('rule-viewer-lazyAttrOptions', Array.isArray(rule.viewer?.lazyAttrOptions) ? rule.viewer.lazyAttrOptions.join(', ') : '');
+        
+        const excludeRule = rule.viewer?.exclude || rule.viewer?.remove || '';
+        const excludeStr = Array.isArray(excludeRule) ? excludeRule.join(', ') : excludeRule;
+        this.setValue('rule-viewer-exclude', excludeStr);
 
         this.runRealtimeDomMatchCount();
     }
@@ -2259,4 +2426,3 @@ export class FormRuleEditor {
         return finalPath;
     }
 }
-
