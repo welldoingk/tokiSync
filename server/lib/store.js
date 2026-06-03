@@ -354,6 +354,8 @@ export class Store {
     setClientReport(clientId, report, now, ttlMs) {
         this._expire(now);
         const prev = this.state.reports[clientId];
+        const hasCurrent = Array.isArray(report.current);
+        const currentLeaseIds = hasCurrent ? new Set(report.current.map((id) => String(id))) : null;
         // 로그 ring 보존 + 증분 append(클라가 heartbeat 마다 마지막 전송 이후의 새 로그만 동봉).
         const logs = (prev && Array.isArray(prev.logs)) ? prev.logs : [];
         if (Array.isArray(report.logs) && report.logs.length) {
@@ -382,7 +384,9 @@ export class Store {
         };
         const ttl = ttlMs || DEFAULT_LEASE_TTL_MS;
         for (const u of this.state.units) {
-            if (u.status === 'leased' && u.clientId === clientId) u.expiresAt = now + ttl;
+            if (u.status !== 'leased' || u.clientId !== clientId) continue;
+            if (hasCurrent && !currentLeaseIds.has(u.id)) continue;
+            u.expiresAt = now + ttl;
         }
     }
 
@@ -425,15 +429,20 @@ export class Store {
     }
 
     /** 특정 unit들을 강제 pending 재투입(대시보드 운영 버튼용 stuck lease 회수). */
-    requeueUnits(ids, now) {
+    requeueUnits(ids, now, options = {}) {
         const set = new Set(ids || []);
+        const allowed = new Set(['leased', 'failed']);
+        if (options.allowDone) allowed.add('done');
+        if (options.allowPending) allowed.add('pending');
+        const resetAttempts = !!options.resetAttempts;
         let n = 0;
         for (const u of this.state.units) {
-            if (set.has(u.id) && (u.status === 'leased' || u.status === 'failed')) {
+            if (set.has(u.id) && allowed.has(u.status)) {
                 u.status = 'pending';
                 u.clientId = null;
                 u.leasedAt = 0;
                 u.expiresAt = 0;
+                if (resetAttempts) u.attempts = 0;
                 u.ts = now;
                 n++;
             }
@@ -453,6 +462,35 @@ export class Store {
             const leasedUnits = this.state.units.filter((u) => u.status === 'leased' && u.clientId === id);
             const leasedIds = new Set(leasedUnits.map((u) => u.id));
             const current = Array.isArray(r.current) ? r.current.filter((unitId) => leasedIds.has(unitId)) : [];
+            const leasedById = new Map(leasedUnits.map((u) => [u.id, u]));
+            const queueByUnitId = new Map(
+                (Array.isArray(r.queue) ? r.queue : [])
+                    .filter((q) => q && q.unitId)
+                    .map((q) => [String(q.unitId), q])
+            );
+            const currentItems = current.map((unitId) => {
+                const unit = leasedById.get(unitId) || {};
+                const q = queueByUnitId.get(unitId) || {};
+                const startedAt = Number(q.startedAt || 0);
+                const lastProgressAt = Number(q.lastProgressAt || startedAt || 0);
+                const retryCount = Number(q.retryCount || 0);
+                return {
+                    unitId,
+                    status: String(q.status || ''),
+                    stage: String(q.stage || ''),
+                    progressPercent: Number.isFinite(Number(q.progressPercent)) ? Number(q.progressPercent) : 0,
+                    startedAt,
+                    lastProgressAt,
+                    stalledForMs: q.status === 'processing' && lastProgressAt ? Math.max(0, now - lastProgressAt) : 0,
+                    retryCount: Number.isFinite(retryCount) ? retryCount : 0,
+                    errorMsg: String(q.errorMsg || ''),
+                    episodeNum: String(q.episodeNum || unit.num || ''),
+                    episodeTitle: String(q.episodeTitle || unit.label || ''),
+                    label: unit.label || '',
+                    num: unit.num || '',
+                    url: unit.url || ''
+                };
+            });
             return {
                 clientId: id,
                 label: r.label,
@@ -461,6 +499,7 @@ export class Store {
                 running: !!r.running && current.length > 0,
                 progress: r.progress,
                 current,
+                currentItems,
                 leased: leasedUnits.length,
                 version: r.version || '',
                 ts: r.ts,

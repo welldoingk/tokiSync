@@ -271,6 +271,37 @@ body.light .icon-btn.active { color: #fff; }
     white-space: nowrap;
 }
 .client-card .cc-current .ico { opacity: .8; margin-right: 4px; }
+.client-card .cc-stage {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--accent-2);
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.client-card .cc-stage-label { color: var(--muted); font-weight: 600; }
+.client-card .cc-stage-pct { color: var(--accent); font-variant-numeric: tabular-nums; }
+.client-card .cc-risk {
+    display: inline-flex;
+    max-width: 100%;
+    margin-top: 5px;
+    padding: 2px 6px;
+    border-radius: 6px;
+    background: rgba(248, 113, 113, .14);
+    color: var(--danger);
+    border: 1px solid rgba(248, 113, 113, .35);
+    font-size: 11px;
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.client-card .cc-risk.soft {
+    background: rgba(251, 191, 36, .14);
+    color: var(--warn);
+    border-color: rgba(251, 191, 36, .35);
+}
 
 /* ── 최근 작품 칩 (투입 편의) ── */
 .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
@@ -347,6 +378,83 @@ body.light .log-stream { background: #14161b; }
 .log-line.log-error, .log-line.log-critical { color: #f87171; }
 .log-line.log-warn { color: #fbbf24; }
 
+/* ── NAS 저장 기준 업데이트 ── */
+.nas-auth-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px;
+}
+.nas-select {
+    width: 100%;
+    margin-top: 6px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    color: var(--text);
+    padding: 8px 10px;
+    font-size: 13px;
+}
+.nas-result { margin-top: 10px; }
+.nas-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+.nas-summary span,
+.nas-badge {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    color: var(--muted);
+    border-radius: 999px;
+    padding: 2px 7px;
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.nas-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 8px;
+}
+.nas-row {
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    border-radius: 8px;
+    padding: 8px 10px;
+}
+.nas-row.warn { border-color: rgba(251, 191, 36, .45); }
+.nas-row.bad { border-color: rgba(248, 113, 113, .45); }
+.nas-row-main {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+.nas-row-main strong {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+}
+.nas-row-meta {
+    margin-top: 3px;
+    color: var(--muted);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.nas-badge { flex: 0 0 auto; }
+.nas-row.warn .nas-badge { color: var(--warn); border-color: rgba(251, 191, 36, .45); }
+.nas-row.bad .nas-badge { color: var(--danger); border-color: rgba(248, 113, 113, .45); }
+.nas-badge.retry { color: var(--accent-2); border-color: rgba(96, 165, 250, .45); }
+
 /* 단일 모드 접기(하단 강등) */
 #single-mode > summary { font-size: 14px; color: var(--text); font-weight: 600; padding: 2px 0; }
 .single-body { margin-top: 12px; }
@@ -367,4 +475,8 @@ body.light .log-stream { background: #14161b; }
     background: var(--danger);
     border-color: var(--danger);
     font-weight: 600;
+}
+
+@media (max-width: 520px) {
+    .nas-auth-grid { grid-template-columns: 1fr; }
 }

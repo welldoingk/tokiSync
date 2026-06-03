@@ -11,6 +11,13 @@
         wakelock: 'toki.wakelock',
         recent: 'toki.recent',
         logsel: 'toki.logsel',
+        nasUrl: 'toki.nas.url',
+        nasUser: 'toki.nas.user',
+        nasPass: 'toki.nas.pass',
+        nasCategory: 'toki.nas.category',
+        nasRatio: 'toki.nas.ratio',
+        nasSeries: 'toki.nas.series',
+        nasUpdateUrl: 'toki.nas.updateUrl',
     };
 
     // 클라 버전 뱃지 기준 — 서버 /clients 의 latestClientVersion(docs/tokiSync.user.js @version)으로
@@ -35,6 +42,7 @@
     let _audioCtx = null;        // 알림 비프용 (lazy)
     let _logSel = '';            // 실시간 로그 패널에서 선택된 clientId
     let _logSince = 0;           // 선택 클라의 마지막 수신 로그 seq(증분 커서)
+    let _nasAudit = null;        // 최근 NAS 스캔 결과
 
     function getBase() {
         const b = (localStorage.getItem(LS.base) || '').trim().replace(/\/+$/, '');
@@ -85,6 +93,59 @@
 
     function statusIcon(s) {
         return s === 'done' ? '✅' : s === 'error' ? '❌' : '⏳';
+    }
+
+    function stageLabel(stage, status, percent) {
+        if (status === 'pending') return '대기';
+        if (status === 'failed') return '실패';
+        if (status === 'completed') return '완료';
+        const map = {
+            STAGE_INIT: '초기화',
+            STAGE_DOM_READY: '페이지 로딩',
+            STAGE_SCROLLING: '스크롤 스캔',
+            STAGE_PARSING: '미디어 파싱',
+            STAGE_DOWNLOADING: '다운로드',
+            STAGE_UPLOADING: '저장',
+            STAGE_COMPLETED: '완료',
+            STAGE_FAILED: '실패',
+        };
+        if (map[stage]) return map[stage];
+        const pct = Number(percent);
+        if (status === 'processing' && Number.isFinite(pct)) {
+            if (pct >= 90) return '저장';
+            if (pct >= 85) return '미디어 파싱';
+            if (pct === 40) return '스크롤 스캔';
+            if (pct >= 10 && pct <= 30) return '페이지 로딩';
+            if (pct > 0) return '다운로드';
+        }
+        return status === 'processing' ? '실행 중' : '';
+    }
+
+    function riskBadgeHtml(client, activeItem) {
+        if (!client || !client.online) return '';
+        if (activeItem) {
+            const status = String(activeItem.status || '');
+            const retryCount = Number(activeItem.retryCount || 0);
+            const stalledForMs = Number(activeItem.stalledForMs || 0);
+            if (status === 'processing' && stalledForMs >= 90000) {
+                const sec = Math.round(stalledForMs / 1000);
+                const stage = stageLabel(activeItem.stage, status, activeItem.progressPercent);
+                return `<div class="cc-risk">정체 ${sec}초${stage ? ` · ${esc(stage)}` : ''}</div>`;
+            }
+            if (status === 'processing' && _isOldVer(client.version) && !Number(activeItem.lastProgressAt || 0)) {
+                return '<div class="cc-risk soft">구버전 · 정체시간 미보고</div>';
+            }
+            if (status === 'pending' && !client.running) {
+                return '<div class="cc-risk">대기열 보유 · 스케줄러 대기</div>';
+            }
+            if (retryCount > 0) {
+                return `<div class="cc-risk soft">재시도 ${retryCount}회</div>`;
+            }
+        }
+        if (!client.running && Array.isArray(client.current) && client.current.length) {
+            return '<div class="cc-risk">보유 lease · 작업 없음</div>';
+        }
+        return '';
     }
 
     function shortUrl(u) {
@@ -367,7 +428,17 @@
                 let cur = null;
                 if (p && p.url) cur = mine.find((u) => u.url === p.url) || null;
                 if (!cur && mine.length) cur = mine[0];
-                const curLabel = cur ? ((cur.num ? cur.num + ' ' : '') + (cur.label || shortUrl(cur.url))) : '';
+                const currentItems = Array.isArray(c.currentItems) ? c.currentItems : [];
+                const activeItem = currentItems.find((i) => i.status === 'processing') || currentItems[0] || null;
+                const curLabel = activeItem
+                    ? (((activeItem.episodeNum || activeItem.num) ? (activeItem.episodeNum || activeItem.num) + ' ' : '') + (activeItem.episodeTitle || activeItem.label || shortUrl(activeItem.url)))
+                    : (cur ? ((cur.num ? cur.num + ' ' : '') + (cur.label || shortUrl(cur.url))) : '');
+                const pct = activeItem && Number.isFinite(Number(activeItem.progressPercent)) ? Math.round(Number(activeItem.progressPercent)) : null;
+                const stage = activeItem ? stageLabel(activeItem.stage, activeItem.status, pct) : '';
+                const stageHtml = (c.online && stage)
+                    ? `<div class="cc-stage"><span class="cc-stage-label">[수집 진행]</span> ${esc(stage)}${pct !== null ? ` <span class="cc-stage-pct">${pct}%</span>` : ''}</div>`
+                    : '';
+                const riskHtml = riskBadgeHtml(c, activeItem);
                 const curHtml = (c.online && curLabel)
                     ? `<div class="cc-current"><span class="ico">▶️</span>${esc(curLabel)}</div>` : '';
                 // 버전: 버전을 보내면 실제 버전을 표기(구버전이면 빨강, 최신이면 초록).
@@ -384,6 +455,8 @@
                         ${run}
                     </div>
                     ${curHtml}
+                    ${stageHtml}
+                    ${riskHtml}
                     <div class="cc-meta muted">
                         보유 ${c.leased || 0}건${phase ? ` · ${esc(phase)}` : ''} · ${c.online ? fmtTime(c.ts) : '오프라인'} ${verHtml}
                     </div>
@@ -580,6 +653,143 @@
         toast(`${urls.length}개 생성됨`);
     }
 
+    function nasPayload() {
+        const body = {
+            webdavUrl: $('nas-url').value.trim(),
+            user: $('nas-user').value.trim(),
+            pass: $('nas-pass').value,
+            category: $('nas-category').value.trim() || 'Webtoon',
+            series: $('nas-series').value.trim(),
+            minSizeRatio: Math.max(0.1, Math.min(1, (parseInt($('nas-ratio').value, 10) || 50) / 100)),
+        };
+        localStorage.setItem(LS.nasUrl, body.webdavUrl);
+        localStorage.setItem(LS.nasUser, body.user);
+        localStorage.setItem(LS.nasPass, body.pass);
+        localStorage.setItem(LS.nasCategory, body.category);
+        localStorage.setItem(LS.nasRatio, String(Math.round(body.minSizeRatio * 100)));
+        localStorage.setItem(LS.nasSeries, body.series);
+        localStorage.setItem(LS.nasUpdateUrl, $('nas-update-url').value.trim());
+        return body;
+    }
+
+    function nasStatusLabel(status) {
+        if (status === 'valid') return '저장됨';
+        if (status === 'small') return '손상 의심';
+        return '누락';
+    }
+
+    function fmtBytes(n) {
+        const v = Number(n) || 0;
+        if (v >= 1024 * 1024 * 1024) return `${(v / 1024 / 1024 / 1024).toFixed(1)}GB`;
+        if (v >= 1024 * 1024) return `${(v / 1024 / 1024).toFixed(1)}MB`;
+        if (v >= 1024) return `${(v / 1024).toFixed(1)}KB`;
+        return `${v}B`;
+    }
+
+    function renderNasAudit(data) {
+        const box = $('nas-result');
+        if (!data || !data.summary) {
+            box.innerHTML = '<div class="empty">NAS 스캔 결과가 없습니다.</div>';
+            return;
+        }
+        const s = data.summary;
+        const rows = Array.isArray(data.rows) ? data.rows : [];
+        const important = rows
+            .filter((r) => r.retryable || r.nasStatus !== 'valid' || r.status === 'failed')
+            .slice(0, 80);
+        const rowHtml = important.length
+            ? important.map((r) => {
+                const cls = r.nasStatus === 'valid' ? 'ok' : (r.nasStatus === 'small' ? 'warn' : 'bad');
+                const file = r.fileName ? `${r.fileName} · ${fmtBytes(r.fileSize)}` : 'NAS 파일 없음';
+                return `<div class="nas-row ${cls}">
+                    <div class="nas-row-main">
+                        <strong>${esc(r.num || '-')} ${esc(r.label || '')}</strong>
+                        <span class="nas-badge">${esc(nasStatusLabel(r.nasStatus))}</span>
+                        ${r.retryable ? '<span class="nas-badge retry">재다운로드 대상</span>' : ''}
+                    </div>
+                    <div class="nas-row-meta">${esc(r.status)} · attempts ${Number(r.attempts || 0)} · ${esc(file)}</div>
+                </div>`;
+            }).join('')
+            : '<div class="empty">누락/손상/실패 항목이 없습니다.</div>';
+        box.innerHTML = `<div class="nas-summary">
+            <span>NAS 유효 ${s.validFiles}/${s.files}</span>
+            <span>서버 unit ${s.units}</span>
+            <span>저장 매칭 ${s.stored}</span>
+            <span>누락 ${s.missing}</span>
+            <span>손상 의심 ${s.small}</span>
+            <span>재다운로드 ${s.retryable}</span>
+        </div>
+        <div class="muted">폴더: ${esc(data.folderUrl || '')} · 기준 ${fmtBytes(data.thresholdBytes || 0)} 이상</div>
+        <div class="nas-rows">${rowHtml}</div>`;
+    }
+
+    async function loadNasSeriesList() {
+        const body = nasPayload();
+        if (!body.webdavUrl) return toast('WebDAV URL을 입력하세요');
+        try {
+            const r = await api('/nas/series', { method: 'POST', body });
+            const sel = $('nas-series-list');
+            const list = r.series || [];
+            sel.innerHTML = list.length
+                ? '<option value="">NAS 폴더 선택</option>' + list.map((name) => `<option value="${esc(name)}">${esc(name)}</option>`).join('')
+                : '<option value="">폴더 없음</option>';
+            sel.onchange = () => {
+                if (sel.value) {
+                    $('nas-series').value = sel.value;
+                    localStorage.setItem(LS.nasSeries, sel.value);
+                }
+            };
+            toast(`${list.length}개 작품 폴더`);
+        } catch (e) {
+            toast('NAS 폴더 조회 실패: ' + e.message);
+        }
+    }
+
+    async function scanNas() {
+        const body = nasPayload();
+        if (!body.webdavUrl) return toast('WebDAV URL을 입력하세요');
+        if (!body.series) return toast('NAS 작품 폴더를 입력하세요');
+        $('nas-result').innerHTML = '<div class="empty">NAS 스캔 중…</div>';
+        try {
+            _nasAudit = await api('/nas/scan', { method: 'POST', body });
+            renderNasAudit(_nasAudit);
+            toast(`NAS 스캔 완료 · 재다운로드 ${(_nasAudit.suggestedIds || []).length}건`);
+        } catch (e) {
+            _nasAudit = null;
+            $('nas-result').innerHTML = `<div class="empty">스캔 실패: ${esc(e.message)}</div>`;
+            toast('NAS 스캔 실패: ' + e.message);
+        }
+    }
+
+    async function requeueNasSuggested() {
+        const ids = (_nasAudit && Array.isArray(_nasAudit.suggestedIds)) ? _nasAudit.suggestedIds : [];
+        if (!ids.length) return toast('재다운로드 대상이 없습니다');
+        if (!confirm(`${ids.length}건을 NAS 기준으로 재다운로드할까요?`)) return;
+        try {
+            const r = await api('/nas/requeue', { method: 'POST', body: { ids } });
+            toast(`${r.requeued}건 재투입`);
+            await scanNas();
+            refresh();
+        } catch (e) {
+            toast('NAS 재투입 실패: ' + e.message);
+        }
+    }
+
+    async function updateNasSeries() {
+        const seriesUrl = $('nas-update-url').value.trim();
+        const series = $('nas-series').value.trim();
+        localStorage.setItem(LS.nasUpdateUrl, seriesUrl);
+        if (!/^https?:\/\//i.test(seriesUrl)) return toast('업데이트용 작품 메인 URL을 입력하세요');
+        try {
+            await api('/jobs/expand', { method: 'POST', body: { seriesUrl, series } });
+            addRecent(seriesUrl, series);
+            toast('업데이트 확인 요청 전송');
+            setTimeout(refresh, 1500);
+        } catch (e) {
+            toast('업데이트 요청 실패: ' + e.message);
+        }
+    }
+
     // 실패/멈춤 unit 재투입
     async function requeueByStatus(status, label) {
         try {
@@ -633,6 +843,15 @@
         $('set-poll').value = getPollSec();
         $('set-notify').checked = localStorage.getItem(LS.notify) === '1';
         $('set-wakelock').checked = localStorage.getItem(LS.wakelock) === '1';
+        if ($('nas-url')) {
+            $('nas-url').value = localStorage.getItem(LS.nasUrl) || '';
+            $('nas-user').value = localStorage.getItem(LS.nasUser) || '';
+            $('nas-pass').value = localStorage.getItem(LS.nasPass) || '';
+            $('nas-category').value = localStorage.getItem(LS.nasCategory) || 'Webtoon';
+            $('nas-ratio').value = localStorage.getItem(LS.nasRatio) || '50';
+            $('nas-series').value = localStorage.getItem(LS.nasSeries) || '';
+            $('nas-update-url').value = localStorage.getItem(LS.nasUpdateUrl) || '';
+        }
     }
 
     function saveSettings() {
@@ -665,6 +884,10 @@
         $('btn-requeue-stuck').onclick = () => requeueByStatus('leased', '진행 중');
         $('btn-pause').onclick = togglePause;
         $('btn-clear-pool').onclick = clearPool;
+        $('btn-nas-series').onclick = loadNasSeriesList;
+        $('btn-nas-scan').onclick = scanNas;
+        $('btn-nas-requeue').onclick = requeueNasSuggested;
+        $('btn-nas-update').onclick = updateNasSeries;
         // 편의 기능 배선
         $('btn-theme').onclick = toggleTheme;
         $('set-notify').onchange = onNotifyToggle;

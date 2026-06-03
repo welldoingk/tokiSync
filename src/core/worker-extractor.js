@@ -425,12 +425,31 @@ export function initWorkerExtractor() {
                     };
 
                     // Execute initial fetch & download
+                    const MIN_COMIC_IMAGE_COUNT = 3;
                     let finalImages = parser.getImageList(document);
                     console.log(`🎯 [TokiSync:Worker] 1차 이미지 주소 ${finalImages.length}개 추출 완료.`);
                     sendDiagnostics(queueId, finalImages.length ? 'comic-image-list' : 'comic-image-list-empty', viewerCfg, {
                         finalImageCount: finalImages.length,
+                        minImageCount: MIN_COMIC_IMAGE_COUNT,
                         firstResolvedImage: finalImages[0] && finalImages[0].url ? finalImages[0].url : ''
                     });
+                    if (finalImages.length < MIN_COMIC_IMAGE_COUNT) {
+                        console.warn(`[TokiSync:Worker] 이미지 ${finalImages.length}개 감지 - 추가 스크롤/재파싱 시도`);
+                        reportProgress(queueId, 35, WORKER_STAGE.SCROLLING);
+                        try { window.focus(); } catch (e) {}
+                        await sleep(2000);
+                        await scrollToLoad(document, 15000, viewerCfg, scanSpeedMultiplier);
+                        finalImages = parser.getImageList(document);
+                        console.log(`🎯 [TokiSync:Worker] 이미지 부족 복구 재추출 결과: ${finalImages.length}개`);
+                        sendDiagnostics(queueId, finalImages.length >= MIN_COMIC_IMAGE_COUNT ? 'comic-image-list-recovered' : (finalImages.length ? 'comic-image-list-too-small' : 'comic-image-list-still-empty'), viewerCfg, {
+                            finalImageCount: finalImages.length,
+                            minImageCount: MIN_COMIC_IMAGE_COUNT,
+                            firstResolvedImage: finalImages[0] && finalImages[0].url ? finalImages[0].url : ''
+                        });
+                        if (finalImages.length < MIN_COMIC_IMAGE_COUNT) {
+                            throw new Error(`페이지 로딩 실패: 이미지가 ${finalImages.length}개라 빈/부분 CBZ 저장을 중단합니다.`);
+                        }
+                    }
                     let downloadedData = await runImageDownloads(finalImages.map(img => img.url));
 
                     // Deep Fallback: Trigger 15s retry if >50% placeholder dummy detected
@@ -448,6 +467,9 @@ export function initWorkerExtractor() {
                         
                         finalImages = parser.getImageList(document);
                         console.log(`🎯 [Deep Fallback] 2차 이미지 주소 ${finalImages.length}개 재추출 완료.`);
+                        if (finalImages.length < MIN_COMIC_IMAGE_COUNT) {
+                            throw new Error(`페이지 로딩 실패: 이미지가 ${finalImages.length}개라 빈/부분 CBZ 저장을 중단합니다.`);
+                        }
                         downloadedData = await runImageDownloads(finalImages.map(img => img.url));
                     }
 

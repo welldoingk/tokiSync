@@ -19,6 +19,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { Store } from './lib/store.js';
 import { Telegram } from './lib/telegram.js';
 import { sendJson, readJsonBody, normalizeUrls } from './lib/util.js';
+import { listNasSeries, scanNasSeries, normalizeEpisodeNumber } from './lib/nas-webdav.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, 'public');
@@ -92,6 +93,82 @@ function sanitizeClientId(raw) {
     if (!s) return '';
     if (!/^[A-Za-z0-9._-]{1,64}$/.test(s)) return '';
     return s;
+}
+
+function nasOptions(body) {
+    return {
+        webdavUrl: String(body.webdavUrl || '').trim().slice(0, 500),
+        user: String(body.user || '').trim().slice(0, 200),
+        pass: String(body.pass || ''),
+        category: String(body.category || 'Webtoon').trim().slice(0, 80) || 'Webtoon',
+        series: String(body.series || '').trim().slice(0, 240),
+        minSizeRatio: Number.isFinite(Number(body.minSizeRatio)) ? Number(body.minSizeRatio) : 0.5,
+    };
+}
+
+function buildNasAudit(scan, units) {
+    const bestFileByNum = new Map();
+    for (const f of scan.files || []) {
+        const prev = bestFileByNum.get(f.numKey);
+        if (!prev || (f.valid && !prev.valid) || Number(f.size || 0) > Number(prev.size || 0)) {
+            bestFileByNum.set(f.numKey, f);
+        }
+    }
+
+    const sameSeries = units.filter((u) => !scan.series || u.series === scan.series);
+    const rows = sameSeries.map((u) => {
+        const numKey = normalizeEpisodeNumber(u.num || '');
+        const file = bestFileByNum.get(numKey);
+        const nasStatus = file ? (file.valid ? 'valid' : 'small') : 'missing';
+        const retryable = nasStatus !== 'valid' && (u.status === 'done' || u.status === 'failed');
+        return {
+            id: u.id,
+            url: u.url,
+            series: u.series,
+            label: u.label,
+            num: u.num || '',
+            status: u.status,
+            attempts: u.attempts || 0,
+            nasStatus,
+            fileName: file ? file.name : '',
+            fileSize: file ? file.size : 0,
+            retryable,
+        };
+    }).sort((a, b) => {
+        const an = Number(normalizeEpisodeNumber(a.num)) || 0;
+        const bn = Number(normalizeEpisodeNumber(b.num)) || 0;
+        return bn - an;
+    });
+
+    const summary = {
+        files: (scan.files || []).length,
+        validFiles: (scan.files || []).filter((f) => f.valid).length,
+        smallFiles: (scan.files || []).filter((f) => !f.valid).length,
+        units: rows.length,
+        done: rows.filter((r) => r.status === 'done').length,
+        failed: rows.filter((r) => r.status === 'failed').length,
+        pending: rows.filter((r) => r.status === 'pending').length,
+        leased: rows.filter((r) => r.status === 'leased').length,
+        stored: rows.filter((r) => r.nasStatus === 'valid').length,
+        missing: rows.filter((r) => r.nasStatus === 'missing').length,
+        small: rows.filter((r) => r.nasStatus === 'small').length,
+        retryable: rows.filter((r) => r.retryable).length,
+    };
+    return {
+        folderUrl: scan.folderUrl,
+        category: scan.category,
+        series: scan.series,
+        thresholdBytes: scan.thresholdBytes,
+        summary,
+        rows,
+        suggestedIds: rows.filter((r) => r.retryable).map((r) => r.id),
+    };
+}
+
+function sendNasError(res, e) {
+    const msg = e && e.message ? e.message : 'NAS WebDAV error';
+    const status = /required|valid|folder/i.test(msg) ? 400 : 502;
+    return sendJson(res, status, { ok: false, error: msg });
 }
 
 /** POST 본문 파싱 — 실패 시 400 응답 후 null 반환 */
@@ -311,6 +388,41 @@ async function handleApi(req, res, url) {
         return sendJson(res, 200, { ok: true, units: store.listUnits(now(), status) });
     }
 
+    // POST /nas/series — NAS WebDAV category 폴더 아래 저장된 작품 폴더 목록 조회.
+    if (method === 'POST' && pathname === '/nas/series') {
+        const body = await parseBody(req, res);
+        if (body === null) return;
+        try {
+            const result = await listNasSeries(nasOptions(body));
+            return sendJson(res, 200, { ok: true, ...result });
+        } catch (e) {
+            return sendNasError(res, e);
+        }
+    }
+
+    // POST /nas/scan — NAS 실제 파일과 서버 unit 상태를 회차 번호 기준으로 비교.
+    if (method === 'POST' && pathname === '/nas/scan') {
+        const body = await parseBody(req, res);
+        if (body === null) return;
+        try {
+            const opts = nasOptions(body);
+            const scan = await scanNasSeries(opts);
+            const units = store.listUnits(now(), '');
+            return sendJson(res, 200, { ok: true, ...buildNasAudit(scan, units) });
+        } catch (e) {
+            return sendNasError(res, e);
+        }
+    }
+
+    // POST /nas/requeue {ids:[]} — NAS 누락/손상으로 판정된 done/failed unit 재다운로드.
+    if (method === 'POST' && pathname === '/nas/requeue') {
+        const body = await parseBody(req, res);
+        if (body === null) return;
+        if (!Array.isArray(body.ids)) return sendJson(res, 400, { ok: false, error: 'ids[] required' });
+        const requeued = store.requeueUnits(body.ids, now(), { allowDone: true, allowPending: false, resetAttempts: true });
+        return sendJson(res, 200, { ok: true, requeued });
+    }
+
     // GET /logs?clientId=X&since=N — 클라이언트별 로그 증분(대시보드 실시간 로그 패널)
     if (method === 'GET' && pathname === '/logs') {
         const clientId = sanitizeClientId(url.searchParams.get('clientId'));
@@ -363,6 +475,7 @@ const server = http.createServer(async (req, res) => {
             pathname === '/complete' ||
             pathname === '/clients' ||
             pathname === '/units' ||
+            pathname.startsWith('/nas/') ||
             pathname === '/logs' ||
             pathname === '/requeue' ||
             pathname.startsWith('/api');

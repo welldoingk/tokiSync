@@ -40,6 +40,8 @@ function kickRemotePoll(reason, queueId) {
 }
 
 const PAGE_LOAD_STALL_TIMEOUT_MS = 90000;
+const DOM_READY_STALL_TIMEOUT_MS = 75000;
+const SCROLL_STALL_TIMEOUT_MS = 90000;
 const WORKER_PROGRESS_STALL_TIMEOUT_MS = 180000;
 const ORPHAN_PROCESSING_GRACE_MS = 15000;
 
@@ -416,6 +418,24 @@ export function initBatchWorkerController() {
                             popupRef,
                             item,
                             `페이지 로딩 정체 ${Math.round((now - startedAt) / 1000)}초`,
+                            logger,
+                            batchClosedCounts
+                        );
+                    } else if (stage === WORKER_STAGE.DOM_READY && percent <= 30 && now - lastProgressAt > DOM_READY_STALL_TIMEOUT_MS) {
+                        recoverStalledBatchWorker(
+                            id,
+                            popupRef,
+                            item,
+                            `페이지 로딩 DOM 정체 ${Math.round((now - lastProgressAt) / 1000)}초`,
+                            logger,
+                            batchClosedCounts
+                        );
+                    } else if (stage === WORKER_STAGE.SCROLLING && percent <= 40 && now - lastProgressAt > SCROLL_STALL_TIMEOUT_MS) {
+                        recoverStalledBatchWorker(
+                            id,
+                            popupRef,
+                            item,
+                            `스크롤 스캔 정체 ${Math.round((now - lastProgressAt) / 1000)}초`,
                             logger,
                             batchClosedCounts
                         );

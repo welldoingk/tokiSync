@@ -131,7 +131,7 @@ export const addEpisodesToQueue = (episodes, novelTitle) => {
       const metadataUpdates = {};
 
       // 기존 버전에서 lease 메타가 누락된 큐 항목을 중복 주입 시점에 보강한다.
-      // 상태는 건드리지 않는다. completed/failed 항목은 remote poll이 보강된 unitId로 /complete를 보고한다.
+      // lease 재투입 항목은 completed/failed terminal 상태로 남아 있으면 서버 leased 상태와 어긋나므로 pending으로 되살린다.
       if (ep.unitId && existing.unitId !== ep.unitId) {
         metadataUpdates.unitId = ep.unitId;
         metadataUpdates.reported = false;
@@ -139,6 +139,35 @@ export const addEpisodesToQueue = (episodes, novelTitle) => {
       if (ep.cover && !existing.cover) metadataUpdates.cover = ep.cover;
       if (ep.meta && !existing.meta) metadataUpdates.meta = ep.meta;
       if ((ep.series || ep.rootFolder) && !existing.series) metadataUpdates.series = ep.series || ep.rootFolder;
+      if (ep.unitId && (existing.status === 'completed' || existing.status === 'failed')) {
+        Object.assign(metadataUpdates, {
+          title: novelTitle,
+          episodeTitle: ep.title,
+          episodeUrl: ep.url,
+          episodeNum: ep.episodeNum || '',
+          folderId: ep.folderId || '',
+          category: ep.category || existing.category || 'Manga',
+          viewerCfg: ep.viewerCfg || {},
+          rootFolder: ep.rootFolder || '',
+          destination: ep.destination || 'local',
+          novelFormat: ep.novelFormat || 'epub',
+          matchedRule: ep.matchedRule || {},
+          protocolDomain: ep.protocolDomain || '',
+          unitId: ep.unitId,
+          cover: ep.cover || existing.cover || '',
+          meta: ep.meta || existing.meta || null,
+          series: ep.series || ep.rootFolder || existing.series || '',
+          status: 'pending',
+          progressPercent: 0,
+          stage: WORKER_STAGE.INIT,
+          retryCount: 0,
+          reported: false,
+          startedAt: 0,
+          lastProgressAt: 0,
+          completedAt: 0,
+          errorMsg: ''
+        });
+      }
 
       if (Object.keys(metadataUpdates).length > 0) {
         queue[existingIndex] = { ...existing, ...metadataUpdates };
@@ -468,11 +497,10 @@ export const runSchedulerOnce = async () => {
     // 3. 동시성 임계값 도달 시 즉시 대기 차단
     //    leaseMax는 서버에서 "보유할 작업 수"일 뿐, 클라이언트 실행 팝업 수가 아니다.
     //    unitId가 있는 멀티-IP lease 작업은 클라당 1개씩 순차 처리해 팝업 난립을 막는다.
-    const hasLeaseProcessing = currentProcessing.some(isLeaseQueueItem);
-    const maxConcurrency = (hasLeaseProcessing || isLeaseQueueItem(nextItem))
-      ? LEASE_MAX_CONCURRENCY
-      : MAX_CONCURRENCY;
-    if (currentProcessing.length >= maxConcurrency) {
+    const leaseProcessingCount = currentProcessing.filter(isLeaseQueueItem).length;
+    const isNextLeaseItem = isLeaseQueueItem(nextItem);
+    if (currentProcessing.length >= MAX_CONCURRENCY ||
+        (isNextLeaseItem && leaseProcessingCount >= LEASE_MAX_CONCURRENCY)) {
       isSchedulerRunning = false;
       return;
     }

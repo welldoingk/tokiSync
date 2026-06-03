@@ -21,7 +21,6 @@ import {
     addEpisodesToQueue,
     getQueue,
     removeQueueItem,
-    updateQueueItem,
     initQueueScheduler,
     runSchedulerOnce,
     setQueuePaused,
@@ -55,7 +54,9 @@ let _lastLogSeq = 0;    // 마지막으로 서버에 전송한 LogBox seq(로그
 let _pollInFlight = false;
 let _pollQueued = false;
 let _lastKickAt = 0;
+let _lastPendingWakeAt = 0;
 const POLL_KICK_THROTTLE_MS = 750;
+const PENDING_WAKE_THROTTLE_MS = 10000;
 
 /** upstream 큐 status('completed'/'failed') 종결 판정. */
 function _isFinished(status) { return status === 'completed' || status === 'failed'; }
@@ -432,8 +433,16 @@ async function pollLegacy(cfg) {
  * 페이지 내비게이션을 거쳐도 unitId가 GM 큐에 영속되므로 완료 매핑/재투입이 안전하게 이어진다.
  */
 async function pollLease(cfg) {
+    // 이전 버전에서 /complete 보고 후 남겨둔 terminal lease 항목은 재lease 중복 판단을 방해하므로 청소한다.
+    {
+        const reportedTerminal = getQueue().filter((i) => i.unitId && _isFinished(i.status) && i.reported);
+        for (const item of reportedTerminal) {
+            try { removeQueueItem(item.id); } catch (e) {}
+        }
+    }
+
     // ① 완료 보고 — unitId 가 붙은 큐 항목 중 종결(completed/failed) & 미보고분 수집.
-    //    제거 대신 reported 플래그로 중복 보고 방지(서버 /complete 는 멱등이라 at-least-once 안전).
+    //    서버 응답을 받은 terminal 항목은 로컬 큐에서 제거해 이후 재lease가 pending으로 들어오게 한다.
     {
         const q = getQueue();
         const finished = q.filter((i) => i.unitId && _isFinished(i.status) && !i.reported);
@@ -446,9 +455,9 @@ async function pollLease(cfg) {
                     token: cfg.token,
                     data: { clientId: cfg.clientId, results },
                 });
-                finished.forEach((i) => updateQueueItem(i.id, { reported: true }));
+                finished.forEach((i) => removeQueueItem(i.id));
             } catch (e) {
-                // 실패 시 reported 미표시 → 다음 주기 재시도(at-least-once 보고).
+                // 실패 시 로컬 큐에 유지 → 다음 주기 재시도(at-least-once 보고).
             }
         }
     }
@@ -488,7 +497,19 @@ async function pollLease(cfg) {
         const cur = getQueue();
         const current = cur.filter((i) => i.unitId && (i.status === 'pending' || i.status === 'processing')).map((i) => i.unitId);
         const processing = cur.filter((i) => i.unitId && i.status === 'processing').map((i) => i.unitId);
-        const queueSummary = cur.map((i) => ({ id: i.id, status: i.status, episodeNum: i.episodeNum, unitId: i.unitId, progressPercent: i.progressPercent }));
+        const queueSummary = cur.map((i) => ({
+            id: i.id,
+            status: i.status,
+            episodeNum: i.episodeNum,
+            episodeTitle: i.episodeTitle,
+            unitId: i.unitId,
+            progressPercent: i.progressPercent,
+            stage: i.stage || '',
+            startedAt: i.startedAt || 0,
+            lastProgressAt: i.lastProgressAt || 0,
+            retryCount: i.retryCount || 0,
+            errorMsg: i.errorMsg || ''
+        }));
         try {
             hbRes = await gmRequest({
                 method: 'POST',
@@ -540,12 +561,21 @@ async function pollLease(cfg) {
 
     // 서버가 정지였다가 재개된 경우, 로컬 큐에는 이미 pending lease가 있지만
     // GM storage 변경 이벤트가 새로 발생하지 않아 스케줄러가 잠든 채 남을 수 있다.
-    // unpaused heartbeat마다 가볍게 1회 깨워 마지막 보유 lease도 실행되게 한다.
+    // pending-only heartbeat에서는 즉시 1회 + 짧은 지연 1회로 깨워 마지막 보유 lease도 실행되게 한다.
     try {
         const q = getQueue();
-        if (q.some((i) => i.unitId && i.status === 'pending') &&
-            !q.some((i) => i.unitId && i.status === 'processing')) {
+        const pendingLeases = q.filter((i) => i.unitId && i.status === 'pending');
+        const hasProcessingLease = q.some((i) => i.unitId && i.status === 'processing');
+        if (pendingLeases.length && !hasProcessingLease) {
+            const now = Date.now();
+            if (now - _lastPendingWakeAt > PENDING_WAKE_THROTTLE_MS) {
+                _lastPendingWakeAt = now;
+                LogBox.getInstance().log(`⏯️ pending lease ${pendingLeases.length}건 감지 → 스케줄러 재가동`, 'warn', 'Remote');
+            }
             runSchedulerOnce();
+            setTimeout(() => {
+                try { runSchedulerOnce(); } catch (e) {}
+            }, 1500);
         }
     } catch (e) {}
 
