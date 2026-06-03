@@ -3,20 +3,19 @@ const webpack = require('webpack');
 const fs = require('fs');
 const TerserPlugin = require('terser-webpack-plugin');
 const pkg = require('./package.json');
-const components = pkg.components || {};
-const scriptVersion = components.script || pkg.version;
-const viewerVersion = components.viewer || pkg.version;
-const gasVersion = components.gas || pkg.version;
+const { resolveComponents, resolveLanUserscriptMetadata } = require('./build/lan-custom.cjs');
+const { scriptVersion, viewerVersion, gasVersion } = resolveComponents(pkg);
+const lanMeta = resolveLanUserscriptMetadata(scriptVersion);
 
 // Metadata Block
 const METADATA_MAIN = `// ==UserScript==
-// @name         TokiSync (Link to Drive) [LAN Custom v1.22]
-// @namespace    local://lan/tokisync-custom
-// @version      ${scriptVersion}
-// @description  Toki series sites -> NAS/Drive syncing (Bundled) — LAN custom: 멀티-IP lease + 네이티브 NAS(WebDAV) on upstream v1.22.0
-// @author       pray4skylark + local patch
-// @updateURL    http://192.168.0.100:8765/docs/tokiSync.user.js
-// @downloadURL  http://192.168.0.100:8765/docs/tokiSync.user.js
+// @name         ${lanMeta.name}
+// @namespace    ${lanMeta.namespace}
+// @version      ${lanMeta.version}
+// @description  ${lanMeta.description}
+// @author       ${lanMeta.author}
+// @updateURL    ${lanMeta.updateURL}
+// @downloadURL  ${lanMeta.downloadURL}
 // @match        *://*/*webtoon/*
 // @match        *://*/*novel/*
 // @match        *://*/*manhwa/*

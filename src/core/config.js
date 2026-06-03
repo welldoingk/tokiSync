@@ -1,3 +1,35 @@
+import {
+    CFG_CUSTOM_RULES,
+    CFG_LOCAL_EPISODE_PADDING,
+    CFG_LOCAL_NAME_TEMPLATE,
+    CFG_REMOTE_RULE_URL,
+    CFG_SCAN_SPEED,
+    CFG_WEBDAV_PASS,
+    CFG_WEBDAV_URL,
+    CFG_WEBDAV_USER,
+    getLanConfigValues,
+    getRemoteConfigFromStore,
+    parseCustomRulesJson
+} from './lan-custom-config.js';
+
+export {
+    CFG_CUSTOM_RULES,
+    CFG_LOCAL_EPISODE_PADDING,
+    CFG_LOCAL_NAME_TEMPLATE,
+    CFG_REMOTE_API_TOKEN,
+    CFG_REMOTE_API_URL,
+    CFG_REMOTE_CLIENT_ID,
+    CFG_REMOTE_ENABLED,
+    CFG_REMOTE_LEASE_MAX,
+    CFG_REMOTE_POLL_SEC,
+    CFG_REMOTE_RULE_URL,
+    CFG_SCAN_SPEED,
+    CFG_WEBDAV_PASS,
+    CFG_WEBDAV_URL,
+    CFG_WEBDAV_USER,
+    normalizeScanSpeed
+} from './lan-custom-config.js';
+
 export const CFG_URL_KEY = "TOKI_GAS_URL"; // legacy
 export const CFG_ID_KEY = "TOKI_GAS_ID";
 export const CFG_FOLDER_ID = "TOKI_FOLDER_ID";
@@ -7,32 +39,6 @@ export const CFG_SLEEP_MODE = "TOKI_SLEEP_MODE";
 export const CFG_SMART_SKIP_RATIO = "TOKI_SMART_SKIP_RATIO";
 export const CFG_NOVEL_MODE = "TOKI_NOVEL_MODE";
 export const CFG_NOVEL_FORMAT = "TOKI_NOVEL_FORMAT";
-export const CFG_REMOTE_RULE_URL = "TOKI_REMOTE_RULE_URL";
-export const CFG_CUSTOM_RULES = "TOKI_CUSTOM_RULES";
-// [LAN custom] 네이티브 NAS WebDAV 저장 (policy 'native' = WebDAV 업로드)
-export const CFG_WEBDAV_URL = "TOKI_WEBDAV_URL";   // 예: http://192.168.0.50:5005/books
-export const CFG_WEBDAV_USER = "TOKI_WEBDAV_USER";
-export const CFG_WEBDAV_PASS = "TOKI_WEBDAV_PASS";
-// [LAN custom] 멀티-IP 원격 lease 제어
-export const CFG_REMOTE_ENABLED = "TOKI_REMOTE_ENABLED";     // "1" | "0"
-export const CFG_REMOTE_API_URL = "TOKI_REMOTE_API_URL";     // 예: http://192.168.0.x:8787
-export const CFG_REMOTE_API_TOKEN = "TOKI_REMOTE_API_TOKEN";
-export const CFG_REMOTE_POLL_SEC = "TOKI_REMOTE_POLL_SEC";   // 폴링 주기(초), 기본 5
-export const CFG_REMOTE_CLIENT_ID = "TOKI_REMOTE_CLIENT_ID"; // 멀티-IP 식별 라벨(예: A-direct). 설정 시 lease 모드
-export const CFG_REMOTE_LEASE_MAX = "TOKI_REMOTE_LEASE_MAX"; // 동시 보유 lease 목표 수(기본 2, MAX_CONCURRENCY=2 이상 권장)
-// [upstream develop v1.21.5] 스캔 속도 + 로컬 명명 템플릿
-export const CFG_SCAN_SPEED = "TOKI_SCAN_SPEED";
-export const CFG_LOCAL_NAME_TEMPLATE = "TOKI_LOCAL_NAME_TEMPLATE";
-export const CFG_LOCAL_EPISODE_PADDING = "TOKI_LOCAL_EPISODE_PADDING";
-
-export function normalizeScanSpeed(value) {
-    let val = parseFloat(value);
-    if (!Number.isFinite(val)) val = 1000;
-    if (val <= 10) {
-        val *= 1000;
-    }
-    return Math.round(val);
-}
 
 /**
  * Get current configuration
@@ -58,11 +64,6 @@ export function getConfig() {
         ? `https://script.google.com/macros/s/${finalGasId}/exec` 
         : gasUrl;
 
-    let remoteRuleUrl = GM_getValue(CFG_REMOTE_RULE_URL, "");
-    if (!remoteRuleUrl || remoteRuleUrl.trim() === "") {
-        remoteRuleUrl = "https://pray4skylark.github.io/tokiSync/rules.json";
-    }
-
     return {
         gasId: finalGasId,
         gasUrl: finalGasUrl,
@@ -73,33 +74,17 @@ export function getConfig() {
         smartSkipRatio: parseInt(GM_getValue(CFG_SMART_SKIP_RATIO, "50"), 10), // default 50% of Max
         novelMode: GM_getValue(CFG_NOVEL_MODE, "perChapter"), // default: chapter-by-chapter
         novelFormat: GM_getValue(CFG_NOVEL_FORMAT, "epub"), // default: EPUB
-        remoteRuleUrl: remoteRuleUrl,
-        customRules: GM_getValue(CFG_CUSTOM_RULES, "[]"),
-        // NAS WebDAV (policy 'native')
-        webdavUrl: GM_getValue(CFG_WEBDAV_URL, ""),
-        webdavUser: GM_getValue(CFG_WEBDAV_USER, ""),
-        webdavPass: GM_getValue(CFG_WEBDAV_PASS, ""),
-        // [upstream develop] 스캔 속도(ms) + 로컬 명명 템플릿
-        scanSpeed: normalizeScanSpeed(GM_getValue(CFG_SCAN_SPEED, "1000")),
-        localNameTemplate: GM_getValue(CFG_LOCAL_NAME_TEMPLATE, "{number} - {title}"),
-        localEpisodePadding: GM_getValue(CFG_LOCAL_EPISODE_PADDING, "4")
+        ...getLanConfigValues(GM_getValue)
     };
 }
 
 /** 멀티-IP 원격 lease 제어 설정. clientId 설정 시 lease 모드. */
 export function getRemoteConfig() {
-    const gv = (k, d) => {
+    const safeGetValue = (k, d) => {
         try { return typeof GM_getValue !== 'undefined' ? GM_getValue(k, d) : d; }
         catch { return d; }
     };
-    return {
-        enabled: gv(CFG_REMOTE_ENABLED, '0') === '1',
-        url: gv(CFG_REMOTE_API_URL, ''),
-        token: gv(CFG_REMOTE_API_TOKEN, ''),
-        pollSec: Math.max(2, parseInt(gv(CFG_REMOTE_POLL_SEC, '5'), 10) || 5),
-        clientId: (gv(CFG_REMOTE_CLIENT_ID, '') || '').trim(),
-        leaseMax: Math.max(1, Math.min(20, parseInt(gv(CFG_REMOTE_LEASE_MAX, '2'), 10) || 2)),
-    };
+    return getRemoteConfigFromStore(safeGetValue);
 }
 
 /**
@@ -316,24 +301,9 @@ export function showConfigModal(popupDoc = document) {
         const newWebdavUser = (doc.getElementById('toki-cfg-webdav-user') || {}).value || '';
         const newWebdavPass = (doc.getElementById('toki-cfg-webdav-pass') || {}).value || '';
 
-        // Validate Custom Rules JSON
         let validCustomRule = '[]';
         try {
-            let parsed = JSON.parse(newCustomRule);
-            
-            // [v1.8.1] 룰 구조 유연화: { rules: [...] } 형태의 전체 구조를 넣었을 경우 자동 처리
-            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                if (Array.isArray(parsed.rules)) {
-                    parsed = parsed.rules;
-                } else {
-                    throw new Error("커스텀 룰은 JSON 배열이거나, 'rules' 키를 포함한 객체여야 합니다.");
-                }
-            }
-
-            if (!Array.isArray(parsed)) {
-                throw new Error("커스텀 룰은 JSON 배열(Array) 형태여야 합니다.");
-            }
-            validCustomRule = JSON.stringify(parsed, null, 2);
+            validCustomRule = parseCustomRulesJson(newCustomRule);
         } catch (e) {
             alert(`커스텀 룰 JSON 파싱 오류:\n${e.message}\n설정을 저장할 수 없습니다.`);
             return;

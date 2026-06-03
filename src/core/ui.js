@@ -12,6 +12,7 @@ import { GenericParser } from './parsers/GenericParser.js';
 import { extractEpisodeData } from './extractor.js';
 import styles from './ui.css';
 import { getQueue, getQueueStats, getQueuePaused, setQueuePaused, removeQueueItem, removeCompletedAndFailedItems, stopAllWorkers, runSchedulerOnce, clearQueue } from './queue.js';
+import { bindLanSettingsAutoSave, getLanSettingsElements, populateLanSettings, renderLanDashboardSettingsHtml, renderLanRuleSettingsHtml, saveDashboardSettings } from './lan-custom-ui.js';
 
 export class LogBox {
     static instance = null;
@@ -533,48 +534,7 @@ export class MenuModal {
                         </button>
                     </div>
 
-                    <div class="toki-section-title">NAS WebDAV</div>
-                    <div class="toki-control-group">
-                        <label class="toki-label">WebDAV URL</label>
-                        <input type="text" id="toki-sel-webdav-url" class="toki-input" placeholder="http://192.168.0.50:5005/books">
-                    </div>
-                    <div class="toki-control-group">
-                        <label class="toki-label">WebDAV 사용자</label>
-                        <input type="text" id="toki-sel-webdav-user" class="toki-input" placeholder="user">
-                    </div>
-                    <div class="toki-control-group">
-                        <label class="toki-label">WebDAV 비밀번호 (보안)</label>
-                        <input type="password" id="toki-sel-webdav-pass" class="toki-input" placeholder="••••">
-                    </div>
-
-                    <div class="toki-section-title">원격 제어 (멀티-IP)</div>
-                    <div class="toki-control-group">
-                        <label class="toki-label">
-                            <input type="checkbox" id="toki-sel-remote-enabled"> 원격 제어 활성화
-                        </label>
-                    </div>
-                    <div class="toki-control-group">
-                        <label class="toki-label">컨트롤 API URL</label>
-                        <input type="text" id="toki-sel-remote-url" class="toki-input" placeholder="http://192.168.0.100:8787">
-                    </div>
-                    <div class="toki-control-group">
-                        <label class="toki-label">API 토큰 (보안)</label>
-                        <input type="password" id="toki-sel-remote-token" class="toki-input" placeholder="open 모드면 비움">
-                    </div>
-                    <div class="toki-form-grid">
-                        <div class="toki-control-group">
-                            <label class="toki-label">폴링 주기 (초)</label>
-                            <input type="number" id="toki-sel-remote-poll" class="toki-input" min="2" placeholder="5">
-                        </div>
-                        <div class="toki-control-group">
-                            <label class="toki-label">동시 보유 작업수 (leaseMax)</label>
-                            <input type="number" id="toki-sel-remote-leasemax" class="toki-input" min="1" max="20" placeholder="2">
-                        </div>
-                    </div>
-                    <div class="toki-control-group">
-                        <label class="toki-label">클라이언트 ID</label>
-                        <input type="text" id="toki-sel-remote-clientid" class="toki-input" placeholder="A-direct / B-vpn">
-                    </div>
+                    ${renderLanDashboardSettingsHtml()}
 
                     <div class="toki-control-group">
                         <label class="toki-label">로컬 파일명 템플릿</label>
@@ -645,15 +605,7 @@ export class MenuModal {
                         </select>
                     </div>
 
-                    <div class="toki-control-group">
-                        <label class="toki-label">원격 파싱 룰 URL (JSON)</label>
-                        <input type="text" id="toki-sel-remote-rule" class="toki-input" placeholder="https://example.com/rules.json">
-                    </div>
-
-                    <div class="toki-control-group">
-                        <label class="toki-label">커스텀 파싱 룰 (JSON Array)</label>
-                        <textarea id="toki-sel-custom-rule" class="toki-textarea toki-textarea-code" placeholder="[{...}]" style="min-height: 100px;"></textarea>
-                    </div>
+                    ${renderLanRuleSettingsHtml()}
 
                     <div class="toki-section-title">Cloud & Storage</div>
                     <div class="toki-control-group">
@@ -867,17 +819,7 @@ export class MenuModal {
         const selNovelFormat = doc.getElementById('toki-sel-novel-format');
         const selNovelTerm = doc.getElementById('toki-sel-novel-mode');
         const selSmartSkip = doc.getElementById('toki-sel-smartskip');
-        const selRemoteRule = doc.getElementById('toki-sel-remote-rule');
-        const selCustomRule = doc.getElementById('toki-sel-custom-rule');
-        const selWebdavUrl = doc.getElementById('toki-sel-webdav-url');
-        const selWebdavUser = doc.getElementById('toki-sel-webdav-user');
-        const selWebdavPass = doc.getElementById('toki-sel-webdav-pass');
-        const selRemoteEnabled = doc.getElementById('toki-sel-remote-enabled');
-        const selRemoteUrl = doc.getElementById('toki-sel-remote-url');
-        const selRemoteToken = doc.getElementById('toki-sel-remote-token');
-        const selRemotePoll = doc.getElementById('toki-sel-remote-poll');
-        const selRemoteClientId = doc.getElementById('toki-sel-remote-clientid');
-        const selRemoteLeaseMax = doc.getElementById('toki-sel-remote-leasemax');
+        const lanEls = getLanSettingsElements(doc);
 
         if (this.handlers.getConfig) {
             const cfg = this.handlers.getConfig();
@@ -903,19 +845,7 @@ export class MenuModal {
             if (selNovelFormat) selNovelFormat.value = cfg.novelFormat || 'epub';
             if (selNovelTerm) selNovelTerm.value = cfg.novelMode || 'perChapter';
             if (selSmartSkip) selSmartSkip.value = cfg.smartSkipRatio !== undefined ? String(cfg.smartSkipRatio) : '50';
-            if (selRemoteRule) selRemoteRule.value = cfg.remoteRuleUrl || '';
-            if (selCustomRule) selCustomRule.value = cfg.customRules || '';
-            if (selWebdavUrl) selWebdavUrl.value = cfg.webdavUrl || '';
-            if (selWebdavUser) selWebdavUser.value = cfg.webdavUser || '';
-            if (selWebdavPass) selWebdavPass.value = cfg.webdavPass || '';
-
-            const remoteCfg = getRemoteConfig();
-            if (selRemoteEnabled) selRemoteEnabled.checked = !!remoteCfg.enabled;
-            if (selRemoteUrl) selRemoteUrl.value = remoteCfg.url || '';
-            if (selRemoteToken) selRemoteToken.value = remoteCfg.token || '';
-            if (selRemotePoll) selRemotePoll.value = String(remoteCfg.pollSec);
-            if (selRemoteClientId) selRemoteClientId.value = remoteCfg.clientId || '';
-            if (selRemoteLeaseMax) selRemoteLeaseMax.value = String(remoteCfg.leaseMax);
+            populateLanSettings(lanEls, cfg, getRemoteConfig());
         }
 
         if (selPolicy) {
@@ -929,15 +859,7 @@ export class MenuModal {
         const saveCfg = (key, value) => {
             if (this.handlers.setConfig) this.handlers.setConfig(key, value);
         };
-        if (selWebdavUrl) selWebdavUrl.onchange = () => saveCfg('TOKI_WEBDAV_URL', selWebdavUrl.value.trim());
-        if (selWebdavUser) selWebdavUser.onchange = () => saveCfg('TOKI_WEBDAV_USER', selWebdavUser.value);
-        if (selWebdavPass) selWebdavPass.onchange = () => saveCfg('TOKI_WEBDAV_PASS', selWebdavPass.value);
-        if (selRemoteEnabled) selRemoteEnabled.onchange = () => saveCfg('TOKI_REMOTE_ENABLED', selRemoteEnabled.checked ? '1' : '0');
-        if (selRemoteUrl) selRemoteUrl.onchange = () => saveCfg('TOKI_REMOTE_API_URL', selRemoteUrl.value.trim());
-        if (selRemoteToken) selRemoteToken.onchange = () => saveCfg('TOKI_REMOTE_API_TOKEN', selRemoteToken.value);
-        if (selRemotePoll) selRemotePoll.onchange = () => saveCfg('TOKI_REMOTE_POLL_SEC', selRemotePoll.value);
-        if (selRemoteClientId) selRemoteClientId.onchange = () => saveCfg('TOKI_REMOTE_CLIENT_ID', selRemoteClientId.value.trim());
-        if (selRemoteLeaseMax) selRemoteLeaseMax.onchange = () => saveCfg('TOKI_REMOTE_LEASE_MAX', selRemoteLeaseMax.value);
+        bindLanSettingsAutoSave(lanEls, saveCfg);
 
         const testNativeBtn = doc.getElementById('toki-btn-test-native');
         if (testNativeBtn) {
@@ -1130,67 +1052,20 @@ export class MenuModal {
         const saveSettingsBtn = doc.getElementById('toki-btn-save-settings');
         if (saveSettingsBtn) {
             saveSettingsBtn.onclick = () => {
-                const newCustomRule = selCustomRule ? (selCustomRule.value.trim() || '[]') : '[]';
-                let validCustomRule = '[]';
-
-                try {
-                    let parsed = JSON.parse(newCustomRule);
-                    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                        if (Array.isArray(parsed.rules)) {
-                            parsed = parsed.rules;
-                        } else {
-                            throw new Error("커스텀 룰은 JSON 배열이거나, 'rules' 키를 포함한 객체여야 합니다.");
-                        }
-                    }
-                    if (!Array.isArray(parsed)) {
-                        throw new Error("커스텀 룰은 JSON 배열(Array) 형태여야 합니다.");
-                    }
-                    validCustomRule = JSON.stringify(parsed, null, 2);
-                } catch (e) {
-                    popupWindow.alert(`커스텀 룰 JSON 파싱 오류:\n${e.message}\n설정을 저장할 수 없습니다.`);
-                    return;
-                }
-
-                const newGasId = selGasId ? selGasId.value.trim() : '';
-                const newFolder = selFolderId ? selFolderId.value.trim() : '';
-                const newApiKey = selApiKey ? selApiKey.value.trim() : '';
-                const newPolicy = selPolicy ? selPolicy.value : 'individual';
-                const newNameTemplate = selNameTemplate ? selNameTemplate.value.trim() || "{number} - {title}" : "{number} - {title}";
-                const newLocalPadding = selLocalPadding ? selLocalPadding.value : '4';
-                const newSleepMode = selSpeed ? selSpeed.value : 'agile';
-                const newScanSpeed = selScanSpeed ? selScanSpeed.value : '1000';
-                const newNovelFormat = selNovelFormat ? selNovelFormat.value : 'epub';
-                const newNovelMode = selNovelTerm ? selNovelTerm.value : 'perChapter';
-                const newSmartSkip = selSmartSkip ? selSmartSkip.value : '50';
-                // URL 입력 시 ID 추출 로직 병합
-                let finalGasId = newGasId;
-                const urlMatch = newGasId.match(/\/s\/([^\/]+)\/exec/);
-                if (urlMatch) finalGasId = urlMatch[1];
-
-                if (this.handlers.setConfig) {
-                    this.handlers.setConfig('TOKI_GAS_ID', finalGasId);
-                    this.handlers.setConfig('TOKI_FOLDER_ID', newFolder);
-                    this.handlers.setConfig('TOKI_API_KEY', newApiKey);
-                    this.handlers.setConfig('TOKI_DOWNLOAD_POLICY', newPolicy);
-                    this.handlers.setConfig('TOKI_LOCAL_NAME_TEMPLATE', newNameTemplate);
-                    this.handlers.setConfig('TOKI_LOCAL_EPISODE_PADDING', newLocalPadding);
-                    this.handlers.setConfig('TOKI_SLEEP_MODE', newSleepMode);
-                    this.handlers.setConfig('TOKI_SCAN_SPEED', newScanSpeed);
-                    this.handlers.setConfig('TOKI_NOVEL_FORMAT', newNovelFormat);
-                    this.handlers.setConfig('TOKI_NOVEL_MODE', newNovelMode);
-                    this.handlers.setConfig('TOKI_SMART_SKIP_RATIO', newSmartSkip);
-                    this.handlers.setConfig('TOKI_REMOTE_RULE_URL', selRemoteRule ? selRemoteRule.value.trim() : '');
-                    this.handlers.setConfig('TOKI_CUSTOM_RULES', validCustomRule);
-                    this.handlers.setConfig('TOKI_WEBDAV_URL', selWebdavUrl ? selWebdavUrl.value.trim() : '');
-                    this.handlers.setConfig('TOKI_WEBDAV_USER', selWebdavUser ? selWebdavUser.value : '');
-                    this.handlers.setConfig('TOKI_WEBDAV_PASS', selWebdavPass ? selWebdavPass.value : '');
-                    this.handlers.setConfig('TOKI_REMOTE_ENABLED', selRemoteEnabled && selRemoteEnabled.checked ? '1' : '0');
-                    this.handlers.setConfig('TOKI_REMOTE_API_URL', selRemoteUrl ? selRemoteUrl.value.trim() : '');
-                    this.handlers.setConfig('TOKI_REMOTE_API_TOKEN', selRemoteToken ? selRemoteToken.value : '');
-                    this.handlers.setConfig('TOKI_REMOTE_POLL_SEC', selRemotePoll ? selRemotePoll.value : '5');
-                    this.handlers.setConfig('TOKI_REMOTE_CLIENT_ID', selRemoteClientId ? selRemoteClientId.value.trim() : '');
-                    this.handlers.setConfig('TOKI_REMOTE_LEASE_MAX', selRemoteLeaseMax ? selRemoteLeaseMax.value : '2');
-                }
+                const saved = saveDashboardSettings({
+                    gasId: selGasId ? selGasId.value : '',
+                    folderId: selFolderId ? selFolderId.value : '',
+                    apiKey: selApiKey ? selApiKey.value : '',
+                    policy: selPolicy ? selPolicy.value : 'individual',
+                    localNameTemplate: selNameTemplate ? selNameTemplate.value : '',
+                    localEpisodePadding: selLocalPadding ? selLocalPadding.value : '4',
+                    sleepMode: selSpeed ? selSpeed.value : 'agile',
+                    scanSpeed: selScanSpeed ? selScanSpeed.value : '1000',
+                    novelFormat: selNovelFormat ? selNovelFormat.value : 'epub',
+                    novelMode: selNovelTerm ? selNovelTerm.value : 'perChapter',
+                    smartSkipRatio: selSmartSkip ? selSmartSkip.value : '50'
+                }, lanEls, saveCfg, (msg) => popupWindow.alert(msg));
+                if (!saved) return;
 
                 popupWindow.alert('설정이 저장되었습니다.');
             };

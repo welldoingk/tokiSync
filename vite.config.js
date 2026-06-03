@@ -2,11 +2,15 @@ import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import path from 'path';
 import fs from 'fs';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const { resolveComponents } = require('./build/lan-custom.cjs');
 
 const pkg = JSON.parse(
   fs.readFileSync(new URL('./package.json', import.meta.url), 'utf-8')
 );
-const components = pkg.components || {};
+const { scriptVersion, viewerVersion, gasVersion } = resolveComponents(pkg);
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
@@ -31,9 +35,9 @@ export default defineConfig(({ mode }) => {
     plugins: [vue()],
     
     define: {
-      __SCRIPT_VERSION__: JSON.stringify(components.script || pkg.version),
-      __VIEWER_VERSION__: JSON.stringify(components.viewer || pkg.version),
-      __GAS_VERSION__: JSON.stringify(components.gas || pkg.version)
+      __SCRIPT_VERSION__: JSON.stringify(scriptVersion),
+      __VIEWER_VERSION__: JSON.stringify(viewerVersion),
+      __GAS_VERSION__: JSON.stringify(gasVersion)
     },
     
     // index.html 위치 (사용자 설정 유지)
