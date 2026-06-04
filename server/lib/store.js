@@ -23,7 +23,7 @@ import { normalizeUrlKey, urlLabel } from './util.js';
 const MAX_COMMANDS = 200;
 const MAX_CAPTCHA = 50;
 const MAX_CLIENT_LOGS = 200;             // 클라이언트별 로그 ring 상한(휘발성, 대시보드 표시용)
-const MAX_EXPANSIONS = 20;               // 보관할 최근 expand 요청 수
+const MAX_EXPANSIONS = 1000;             // 보관할 최근 expand 요청 수(구독 일괄 업데이트 시 누락 방지)
 const EXPANSION_TTL_MS = 15 * 60 * 1000; // expand 요청 유효 시간(15분) — 이후 자동 만료
 const MAX_UNITS = 5000;                 // 작업 풀 상한 — 초과 시 오래된 done/failed부터 정리
 const MAX_ATTEMPTS = 3;                  // attempts 상한 도달 시 failed 격리(무한 재투입 방지)
@@ -41,6 +41,8 @@ export class Store {
             commands: [],
             units: [],
             expansions: [], // 작품 메인 URL → 회차 자동 펼침 요청(클라이언트가 처리)
+            subscriptions: [], // [{seriesUrl, series, category, addedAt, lastRun, lastNew, lastStatus, enabled}] 자동 업데이트 구독
+            cron: { expr: '0 4 * * *', enabled: false, lastRun: 0 }, // 스케줄(기본 매일 04:00, 기본 비활성)
             report: { queue: [], running: false, progress: null, ts: 0 }, // 레거시 단일 슬롯(휘발성)
             reports: {}, // clientId → 리포트 맵(휘발성)
             captcha: [],
@@ -62,6 +64,15 @@ export class Store {
                     commands: Array.isArray(raw.commands) ? raw.commands : [],
                     units: Array.isArray(raw.units) ? raw.units : [],
                     expansions: Array.isArray(raw.expansions) ? raw.expansions : [],
+                    subscriptions: Array.isArray(raw.subscriptions) ? raw.subscriptions : [],
+                    cron:
+                        raw.cron && typeof raw.cron === 'object'
+                            ? {
+                                  expr: typeof raw.cron.expr === 'string' ? raw.cron.expr : '0 4 * * *',
+                                  enabled: !!raw.cron.enabled,
+                                  lastRun: Number(raw.cron.lastRun) || 0,
+                              }
+                            : { expr: '0 4 * * *', enabled: false, lastRun: 0 },
                     report: { queue: [], running: false, progress: null, ts: 0 },
                     reports: {},
                     captcha: Array.isArray(raw.captcha) ? raw.captcha : [],
@@ -85,10 +96,15 @@ export class Store {
         try {
             mkdirSync(dirname(this.dataFile), { recursive: true });
             // report/reports(휘발성)는 제외하고 저장
-            const { seq, unitSeq, expSeq, clearSeq, paused, commands, units, expansions, captcha } = this.state;
+            const { seq, unitSeq, expSeq, clearSeq, paused, commands, units, expansions, subscriptions, cron, captcha } =
+                this.state;
             writeFileSync(
                 this.dataFile,
-                JSON.stringify({ seq, unitSeq, expSeq, clearSeq, paused, commands, units, expansions, captcha }, null, 2)
+                JSON.stringify(
+                    { seq, unitSeq, expSeq, clearSeq, paused, commands, units, expansions, subscriptions, cron, captcha },
+                    null,
+                    2
+                )
             );
         } catch (e) {
             console.error('[store] persist failed:', e.message);
@@ -151,6 +167,72 @@ export class Store {
         this.state.expansions = this.state.expansions.filter((e) => now - e.ts < EXPANSION_TTL_MS);
         if (this.state.expansions.length !== before) this._persist();
         return this.state.expansions.map((e) => ({ id: e.id, seriesUrl: e.seriesUrl, series: e.series, ts: e.ts }));
+    }
+
+    // ── 구독 자동 업데이트(subscriptions) + 스케줄(cron) ─────────────────────
+    //   구독은 seriesUrl을 키로 멱등 upsert한다. /jobs 투입 시 자동 등록되거나
+    //   NAS 폴더 가져오기/수동 추가로 등록. 크론 tick이 enabled 구독마다 expand 생성.
+
+    listSubscriptions() {
+        return this.state.subscriptions.slice();
+    }
+
+    /** seriesUrl 키로 구독 추가/갱신. 기존이 있으면 series/category만 보강(enabled·통계는 보존). */
+    upsertSubscription({ seriesUrl, series, category }, now) {
+        if (!seriesUrl) return null;
+        const key = String(seriesUrl).trim();
+        let sub = this.state.subscriptions.find((s) => s.seriesUrl === key);
+        if (sub) {
+            if (series) sub.series = series;
+            if (category) sub.category = category;
+        } else {
+            sub = {
+                seriesUrl: key,
+                series: series || '',
+                category: category || '',
+                addedAt: now,
+                lastRun: 0,
+                lastNew: 0,
+                lastStatus: '',
+                enabled: true,
+            };
+            this.state.subscriptions.push(sub);
+        }
+        this._persist();
+        return sub;
+    }
+
+    removeSubscription(seriesUrl) {
+        const before = this.state.subscriptions.length;
+        this.state.subscriptions = this.state.subscriptions.filter((s) => s.seriesUrl !== seriesUrl);
+        const removed = before !== this.state.subscriptions.length;
+        if (removed) this._persist();
+        return removed;
+    }
+
+    setSubscriptionMeta(seriesUrl, patch) {
+        const sub = this.state.subscriptions.find((s) => s.seriesUrl === seriesUrl);
+        if (!sub) return null;
+        if (typeof patch.enabled === 'boolean') sub.enabled = patch.enabled;
+        if (typeof patch.lastRun === 'number') sub.lastRun = patch.lastRun;
+        if (typeof patch.lastNew === 'number') sub.lastNew = patch.lastNew;
+        if (typeof patch.lastStatus === 'string') sub.lastStatus = patch.lastStatus;
+        if (typeof patch.series === 'string') sub.series = patch.series;
+        if (typeof patch.category === 'string') sub.category = patch.category;
+        this._persist();
+        return sub;
+    }
+
+    getCron() {
+        return { ...this.state.cron };
+    }
+
+    setCron(patch) {
+        if (patch && typeof patch.expr === 'string') this.state.cron.expr = patch.expr.trim();
+        if (patch && typeof patch.enabled === 'boolean') this.state.cron.enabled = patch.enabled;
+        if (patch && typeof patch.lastRun === 'number') this.state.cron.lastRun = patch.lastRun;
+        this._persist();
+        return { ...this.state.cron };
     }
 
     snapshot(now, onlineWindowMs) {

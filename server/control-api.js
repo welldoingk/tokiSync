@@ -61,6 +61,12 @@ function loadConfig() {
             ? join(__dirname, cfg.dataFile)
             : join(__dirname, 'data', 'state.json'),
         telegram: cfg.telegram || {},
+        // 서버측 NAS 자격증명(구독 자동 업데이트의 NAS 스캔/중복판별용). 없으면 NAS 기반 기능 비활성.
+        nasWebdavUrl: process.env.TOKI_NAS_URL || cfg.nasWebdavUrl || '',
+        nasUser: process.env.TOKI_NAS_USER || cfg.nasUser || '',
+        nasPass: process.env.TOKI_NAS_PASS || cfg.nasPass || '',
+        // 구독 seriesUrl 재구성/펼침의 기준 도메인(사이트 도메인 로테이션 대응).
+        siteBaseUrl: (process.env.TOKI_SITE_BASE || cfg.siteBaseUrl || 'https://sbxh4.com').replace(/\/+$/, ''),
     };
 }
 
@@ -76,6 +82,24 @@ setInterval(() => {
     const cutoff = Date.now() - 5 * 60 * 1000;
     for (const [id, up] of nasUploads) if (up.ts < cutoff) nasUploads.delete(id);
 }, 60 * 1000).unref?.();
+
+// 구독 자동 업데이트 크론 tick — 30초마다 cron.expr 매칭 검사, 같은 분 중복 실행 방지.
+let _cronLastMinute = 0;
+setInterval(() => {
+    try {
+        const cron = store.getCron();
+        if (!cron.enabled || !cron.expr) return;
+        const d = new Date();
+        if (!cronMatches(cron.expr, d)) return;
+        const minuteStamp = Math.floor(Date.now() / 60000);
+        if (_cronLastMinute === minuteStamp) return;
+        _cronLastMinute = minuteStamp;
+        store.setCron({ lastRun: Date.now() });
+        runSubscriptionUpdate(null);
+    } catch (e) {
+        console.warn('[subs] cron tick error:', e.message);
+    }
+}, 30 * 1000).unref?.();
 
 function safeEqual(a, b) {
     const ba = Buffer.from(String(a));
@@ -110,14 +134,173 @@ function sanitizeClientId(raw) {
 }
 
 function nasOptions(body) {
+    // 자격증명은 요청 body 우선, 없으면 서버 config(nasWebdavUrl/User/Pass)로 폴백.
     return {
-        webdavUrl: String(body.webdavUrl || '').trim().slice(0, 500),
-        user: String(body.user || '').trim().slice(0, 200),
-        pass: String(body.pass || ''),
+        webdavUrl: (String(body.webdavUrl || '').trim() || config.nasWebdavUrl).slice(0, 500),
+        user: (String(body.user || '').trim() || config.nasUser).slice(0, 200),
+        pass: String(body.pass || '') || config.nasPass,
         category: String(body.category || 'Webtoon').trim().slice(0, 80) || 'Webtoon',
         series: String(body.series || '').trim().slice(0, 240),
         minSizeRatio: Number.isFinite(Number(body.minSizeRatio)) ? Number(body.minSizeRatio) : 0.5,
     };
+}
+
+// 서버에 NAS 자격증명이 설정돼 있나(구독 자동 업데이트 NAS 기능 가용 여부).
+function hasServerNas() {
+    return !!(config.nasWebdavUrl && config.nasUser);
+}
+
+// URL path의 작품 타입 → NAS 카테고리 폴더명 매핑.
+const NAS_CATEGORY_BY_TYPE = { novel: 'Novel', manhwa: 'Manga', manga: 'Manga', webtoon: 'Webtoon' };
+
+// 회차 URL 또는 작품 URL에서 {seriesUrl(현재 도메인 보존), category, id, type} 역산. 실패 시 null.
+function parseSeriesFromUrl(url) {
+    try {
+        const u = new URL(String(url));
+        const m = u.pathname.match(/\/(novel|manhwa|manga|webtoon)\/(\d+)/i);
+        if (!m) return null;
+        const type = m[1].toLowerCase();
+        const id = m[2];
+        return { seriesUrl: `${u.origin}/${type}/${id}`, category: NAS_CATEGORY_BY_TYPE[type] || '', id, type };
+    } catch (e) {
+        return null;
+    }
+}
+
+// items({url,num,...}) 중 NAS에 이미 유효 파일로 존재하는 회차를 제거 → 신규 회차만 반환.
+//   서버 NAS 자격증명/카테고리/시리즈가 없거나 스캔 실패면 fail-open(원본 그대로).
+async function filterUnitsAgainstNas(series, category, items) {
+    if (!hasServerNas() || !series || !category) return { items, skippedExisting: 0 };
+    try {
+        const scan = await scanNasSeries({
+            webdavUrl: config.nasWebdavUrl,
+            user: config.nasUser,
+            pass: config.nasPass,
+            category,
+            series,
+            minSizeRatio: 0.5,
+        });
+        const present = new Set();
+        for (const f of scan.files || []) if (f.valid && f.numKey) present.add(f.numKey);
+        if (!present.size) return { items, skippedExisting: 0 };
+        const filtered = [];
+        let skipped = 0;
+        for (const it of items) {
+            const numKey = it && it.num != null ? normalizeEpisodeNumber(it.num) : '';
+            if (numKey && present.has(numKey)) {
+                skipped++;
+                continue;
+            }
+            filtered.push(it);
+        }
+        return { items: filtered, skippedExisting: skipped };
+    } catch (e) {
+        console.warn('[subs] NAS dedup scan 실패(fail-open):', e.message);
+        return { items, skippedExisting: 0 };
+    }
+}
+
+// ── 크론 매처(경량, 분 단위) ────────────────────────────────────────────────
+//   필드 5개(m h dom mon dow). 각 필드: * | n | a-b | */n | a-b/n, 쉼표 결합. 요일 0=일~6=토.
+function _cronFieldMatch(field, value, min, max) {
+    if (field === '*') return true;
+    for (const part of field.split(',')) {
+        let step = 1;
+        let range = part;
+        const slash = part.split('/');
+        if (slash.length === 2) {
+            range = slash[0];
+            step = parseInt(slash[1], 10) || 1;
+        }
+        let lo;
+        let hi;
+        if (range === '*') {
+            lo = min;
+            hi = max;
+        } else if (range.includes('-')) {
+            const [a, b] = range.split('-');
+            lo = parseInt(a, 10);
+            hi = parseInt(b, 10);
+        } else {
+            lo = parseInt(range, 10);
+            hi = lo;
+        }
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) continue;
+        for (let v = lo; v <= hi; v += step) if (v === value) return true;
+    }
+    return false;
+}
+
+function isValidCron(expr) {
+    const f = String(expr || '').trim().split(/\s+/);
+    if (f.length !== 5) return false;
+    const re = /^(\*|\d+(-\d+)?)(\/\d+)?(,(\*|\d+(-\d+)?)(\/\d+)?)*$/;
+    return f.every((x) => re.test(x));
+}
+
+function cronMatches(expr, date) {
+    const f = String(expr || '').trim().split(/\s+/);
+    if (f.length !== 5) return false;
+    return (
+        _cronFieldMatch(f[0], date.getMinutes(), 0, 59) &&
+        _cronFieldMatch(f[1], date.getHours(), 0, 23) &&
+        _cronFieldMatch(f[2], date.getDate(), 1, 31) &&
+        _cronFieldMatch(f[3], date.getMonth() + 1, 1, 12) &&
+        _cronFieldMatch(f[4], date.getDay(), 0, 6)
+    );
+}
+
+// ── 구독 업데이트 실행 / NAS 가져오기 ───────────────────────────────────────
+// enabled 구독(또는 지정 목록)마다 expand 요청 생성 → 온라인 클라가 펼쳐 /jobs 투입.
+//   NAS 신규-회차 필터는 /jobs 단계에서 적용되므로 여기선 펼침 트리거만 한다.
+function runSubscriptionUpdate(onlyUrls) {
+    const subs = store.listSubscriptions().filter((s) => (onlyUrls ? onlyUrls.includes(s.seriesUrl) : s.enabled));
+    let triggered = 0;
+    for (const s of subs) {
+        store.addExpansion(s.seriesUrl, s.series || '', now());
+        store.setSubscriptionMeta(s.seriesUrl, { lastRun: now(), lastStatus: 'queued' });
+        triggered++;
+    }
+    if (triggered) console.log(`[subs] update triggered for ${triggered} subscription(s)`);
+    return { triggered, total: subs.length };
+}
+
+// NAS 카테고리/작품 폴더 스캔 → '[id] 작품명' 폴더에서 구독 시드(siteBaseUrl 기준 best-effort URL).
+async function importSubscriptionsFromNas() {
+    const creds = { webdavUrl: config.nasWebdavUrl, user: config.nasUser, pass: config.nasPass };
+    const TYPE_BY_CATEGORY = { Novel: 'novel', Manga: 'manhwa', Manhwa: 'manhwa', Webtoon: 'webtoon' };
+    const catRes = await listNasCategories(creds);
+    let imported = 0;
+    let skipped = 0;
+    for (const cat of catRes.categories || []) {
+        const catName = typeof cat === 'string' ? cat : cat && cat.name;
+        if (!catName) continue;
+        const type = TYPE_BY_CATEGORY[catName];
+        if (!type) {
+            skipped++;
+            continue;
+        }
+        let seriesList = [];
+        try {
+            seriesList = (await listNasSeries({ ...creds, category: catName })).series || [];
+        } catch (e) {
+            continue;
+        }
+        for (const s of seriesList) {
+            const folder = typeof s === 'string' ? s : s && s.name;
+            if (!folder) continue;
+            const m = folder.match(/\[(\d+)\]/); // '[35155] 작품명' → 작품 id
+            if (!m) {
+                skipped++;
+                continue;
+            }
+            const seriesUrl = `${config.siteBaseUrl}/${type}/${m[1]}`;
+            store.upsertSubscription({ seriesUrl, series: folder, category: catName }, now());
+            imported++;
+        }
+    }
+    console.log(`[subs] NAS import: ${imported} imported, ${skipped} skipped`);
+    return { imported, skipped };
 }
 
 function buildNasAudit(scan, units) {
@@ -586,10 +769,27 @@ async function handleApi(req, res, url) {
             items = normalizeUrls(body.urls);
         }
         if (!items.length) return sendJson(res, 400, { ok: false, error: 'no valid urls/units' });
+
+        // 자동 구독: 회차 URL에서 작품 URL·카테고리를 역산해 구독 목록에 멱등 등록/갱신.
+        //   (현재 도메인 그대로 보존 → 크론이 동일 도메인으로 펼침.)
+        const sampleUrl = typeof items[0] === 'string' ? items[0] : (items[0] && items[0].url) || '';
+        const parsed = parseSeriesFromUrl(sampleUrl);
+        if (parsed) store.upsertSubscription({ seriesUrl: parsed.seriesUrl, series, category: parsed.category }, now());
+
+        // NAS 신규 회차만: 서버 NAS 자격증명이 있으면 이미 받은 회차(NAS 유효 파일) 제외.
+        //   units[]({num}) 형에만 적용(번호 필요). urls[] 문자열 형은 그대로(fail-open).
+        const isUnitObjects = Array.isArray(body.units) && body.units.length;
+        let skippedExisting = 0;
+        if (isUnitObjects && parsed) {
+            const r = await filterUnitsAgainstNas(series, parsed.category, items);
+            items = r.items;
+            skippedExisting = r.skippedExisting;
+        }
+
         const { added, skipped } = store.addUnits(series, items, now());
         const { pool } = store.clients(now(), config.onlineWindowMs);
         if (added) broadcastClientsSnapshot();
-        return sendJson(res, 200, { ok: true, added, skipped, pool });
+        return sendJson(res, 200, { ok: true, added, skipped, skippedExisting, pool });
     }
 
     // POST /jobs/expand {seriesUrl, series} — 작품 메인 URL 자동 펼침 요청.
@@ -619,6 +819,82 @@ async function handleApi(req, res, url) {
         store.clearUnits();
         broadcastClientsSnapshot();
         return sendJson(res, 200, { ok: true });
+    }
+
+    // ── 구독 자동 업데이트(subscriptions) ────────────────────────────────────
+    // GET /subscriptions — 구독 목록 + 크론 설정 + 서버 NAS 가용 여부
+    if (method === 'GET' && pathname === '/subscriptions') {
+        return sendJson(res, 200, {
+            ok: true,
+            subscriptions: store.listSubscriptions(),
+            cron: store.getCron(),
+            nasReady: hasServerNas(),
+        });
+    }
+
+    // POST /subscriptions {seriesUrl, series?, category?} — 수동 추가/갱신
+    if (method === 'POST' && pathname === '/subscriptions') {
+        const body = await parseBody(req, res);
+        if (body === null) return;
+        let seriesUrl = typeof body.seriesUrl === 'string' ? body.seriesUrl.trim() : '';
+        if (!/^https?:\/\//i.test(seriesUrl)) return sendJson(res, 400, { ok: false, error: 'valid seriesUrl required' });
+        const parsed = parseSeriesFromUrl(seriesUrl);
+        if (parsed) seriesUrl = parsed.seriesUrl; // 회차 URL을 줘도 작품 URL로 정규화
+        const series = typeof body.series === 'string' ? body.series.slice(0, 240) : '';
+        const category = typeof body.category === 'string' && body.category ? body.category : parsed ? parsed.category : '';
+        const sub = store.upsertSubscription({ seriesUrl: seriesUrl.slice(0, 500), series, category }, now());
+        return sendJson(res, 200, { ok: true, subscription: sub });
+    }
+
+    // POST /subscriptions/remove {seriesUrl}
+    if (method === 'POST' && pathname === '/subscriptions/remove') {
+        const body = await parseBody(req, res);
+        if (body === null) return;
+        const removed = store.removeSubscription(String(body.seriesUrl || ''));
+        return sendJson(res, 200, { ok: true, removed });
+    }
+
+    // POST /subscriptions/toggle {seriesUrl, enabled}
+    if (method === 'POST' && pathname === '/subscriptions/toggle') {
+        const body = await parseBody(req, res);
+        if (body === null) return;
+        const sub = store.setSubscriptionMeta(String(body.seriesUrl || ''), { enabled: !!body.enabled });
+        if (!sub) return sendJson(res, 404, { ok: false, error: 'subscription not found' });
+        return sendJson(res, 200, { ok: true, subscription: sub });
+    }
+
+    // POST /subscriptions/cron {expr?, enabled?} — 스케줄 설정
+    if (method === 'POST' && pathname === '/subscriptions/cron') {
+        const body = await parseBody(req, res);
+        if (body === null) return;
+        const patch = {};
+        if (typeof body.expr === 'string') {
+            if (!isValidCron(body.expr.trim())) return sendJson(res, 400, { ok: false, error: 'invalid cron expr' });
+            patch.expr = body.expr.trim();
+        }
+        if (typeof body.enabled === 'boolean') patch.enabled = body.enabled;
+        const cron = store.setCron(patch);
+        return sendJson(res, 200, { ok: true, cron });
+    }
+
+    // POST /subscriptions/run-now {seriesUrl?} — 즉시 업데이트(특정 구독 또는 전체 enabled)
+    if (method === 'POST' && pathname === '/subscriptions/run-now') {
+        const body = await parseBody(req, res);
+        if (body === null) return;
+        const only = typeof body.seriesUrl === 'string' && body.seriesUrl ? String(body.seriesUrl) : null;
+        const r = runSubscriptionUpdate(only ? [only] : null);
+        return sendJson(res, 200, { ok: true, ...r });
+    }
+
+    // POST /subscriptions/import-nas — NAS 폴더 스캔 → 기존 작품을 구독으로 시드(best-effort URL)
+    if (method === 'POST' && pathname === '/subscriptions/import-nas') {
+        if (!hasServerNas()) return sendJson(res, 400, { ok: false, error: 'server NAS credentials not configured' });
+        try {
+            const r = await importSubscriptionsFromNas();
+            return sendJson(res, 200, { ok: true, ...r });
+        } catch (e) {
+            return sendJson(res, 502, { ok: false, error: e.message || 'NAS import failed' });
+        }
     }
 
     // GET /lease?clientId=X&max=N — pending unit 최대 N개를 원자적으로 임대
@@ -793,6 +1069,8 @@ const server = http.createServer(async (req, res) => {
             pathname === '/jobs' ||
             pathname === '/jobs/expand' ||
             pathname === '/jobs/clear' ||
+            pathname === '/subscriptions' ||
+            pathname.startsWith('/subscriptions/') ||
             pathname === '/pause' ||
             pathname === '/resume' ||
             pathname === '/lease' ||
