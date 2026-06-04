@@ -65,6 +65,8 @@ function loadConfig() {
         nasWebdavUrl: process.env.TOKI_NAS_URL || cfg.nasWebdavUrl || '',
         nasUser: process.env.TOKI_NAS_USER || cfg.nasUser || '',
         nasPass: process.env.TOKI_NAS_PASS || cfg.nasPass || '',
+        // 손상 판별 임계(중앙값 대비 비율, 0~1). 구독 NAS 중복 필터의 valid 판정에 사용.
+        nasMinSizeRatio: Number.isFinite(Number(cfg.nasMinSizeRatio)) ? Number(cfg.nasMinSizeRatio) : 0.5,
         // 구독 seriesUrl 재구성/펼침의 기준 도메인(사이트 도메인 로테이션 대응).
         siteBaseUrl: (process.env.TOKI_SITE_BASE || cfg.siteBaseUrl || 'https://sbxh4.com').replace(/\/+$/, ''),
     };
@@ -167,36 +169,68 @@ function parseSeriesFromUrl(url) {
     }
 }
 
+// NAS 폴더를 '작품 id'로 해결한다. 폴더명이 제목 변경/특수문자 sanitize로 hint와 달라도
+//   카테고리 안에서 '[<id>]'가 들어간 폴더를 찾아 매칭(전 회차 재다운로드 사고 방지).
+//   id 없거나 매칭 실패 시 hint(또는 '') 폴백.
+async function resolveNasFolder(category, id, seriesHint) {
+    if (!id || !category || !hasServerNas()) return seriesHint || '';
+    try {
+        const { series } = await listNasSeries({
+            webdavUrl: config.nasWebdavUrl,
+            user: config.nasUser,
+            pass: config.nasPass,
+            category,
+        });
+        const re = new RegExp(`\\[${id}\\]`);
+        const match = (series || []).find((f) => re.test(typeof f === 'string' ? f : f && f.name));
+        if (match) return typeof match === 'string' ? match : match.name;
+    } catch (e) {
+        console.warn('[subs] NAS 폴더 id해결 실패(fail-open):', e.message);
+    }
+    return seriesHint || '';
+}
+
 // items({url,num,...}) 중 NAS에 이미 유효 파일로 존재하는 회차를 제거 → 신규 회차만 반환.
-//   서버 NAS 자격증명/카테고리/시리즈가 없거나 스캔 실패면 fail-open(원본 그대로).
-async function filterUnitsAgainstNas(series, category, items) {
-    if (!hasServerNas() || !series || !category) return { items, skippedExisting: 0 };
+//   - 폴더는 작품 id로 해결(폴더명 드리프트 방어). valid 판정은 config.nasMinSizeRatio(중앙값 기준).
+//   - 서버 NAS 자격증명/카테고리가 없거나 스캔 실패면 fail-open(원본 그대로).
+//   반환: { items(신규), skippedExisting(이미 받은 유효), suspect(손상의심=재투입됨), folder, onNas }
+async function filterUnitsAgainstNas(series, category, id, items) {
+    if (!hasServerNas() || !category) return { items, skippedExisting: 0, suspect: 0, folder: series, onNas: 0 };
+    const folder = await resolveNasFolder(category, id, series);
+    if (!folder) return { items, skippedExisting: 0, suspect: 0, folder: series, onNas: 0 };
     try {
         const scan = await scanNasSeries({
             webdavUrl: config.nasWebdavUrl,
             user: config.nasUser,
             pass: config.nasPass,
             category,
-            series,
-            minSizeRatio: 0.5,
+            series: folder,
+            minSizeRatio: config.nasMinSizeRatio,
         });
-        const present = new Set();
-        for (const f of scan.files || []) if (f.valid && f.numKey) present.add(f.numKey);
-        if (!present.size) return { items, skippedExisting: 0 };
+        const valid = new Set();
+        const suspectKeys = new Set();
+        for (const f of scan.files || []) {
+            if (!f.numKey) continue;
+            if (f.valid) valid.add(f.numKey);
+            else suspectKeys.add(f.numKey); // 존재하나 too-small → 재다운로드 대상
+        }
+        if (!valid.size && !suspectKeys.size) return { items, skippedExisting: 0, suspect: 0, folder, onNas: 0 };
         const filtered = [];
         let skipped = 0;
+        let suspect = 0;
         for (const it of items) {
             const numKey = it && it.num != null ? normalizeEpisodeNumber(it.num) : '';
-            if (numKey && present.has(numKey)) {
-                skipped++;
+            if (numKey && valid.has(numKey)) {
+                skipped++; // 이미 유효 파일 존재 → 스킵
                 continue;
             }
+            if (numKey && suspectKeys.has(numKey)) suspect++; // 손상의심 → 재투입(아래 filtered 포함)
             filtered.push(it);
         }
-        return { items: filtered, skippedExisting: skipped };
+        return { items: filtered, skippedExisting: skipped, suspect, folder, onNas: valid.size };
     } catch (e) {
         console.warn('[subs] NAS dedup scan 실패(fail-open):', e.message);
-        return { items, skippedExisting: 0 };
+        return { items, skippedExisting: 0, suspect: 0, folder, onNas: 0 };
     }
 }
 
@@ -780,16 +814,26 @@ async function handleApi(req, res, url) {
         //   units[]({num}) 형에만 적용(번호 필요). urls[] 문자열 형은 그대로(fail-open).
         const isUnitObjects = Array.isArray(body.units) && body.units.length;
         let skippedExisting = 0;
+        let suspect = 0;
         if (isUnitObjects && parsed) {
-            const r = await filterUnitsAgainstNas(series, parsed.category, items);
+            const r = await filterUnitsAgainstNas(series, parsed.category, parsed.id, items);
             items = r.items;
             skippedExisting = r.skippedExisting;
+            suspect = r.suspect;
         }
 
         const { added, skipped } = store.addUnits(series, items, now());
+        if (parsed) {
+            store.setSubscriptionMeta(parsed.seriesUrl, {
+                lastRun: now(),
+                lastNew: added,
+                lastSkipped: skippedExisting,
+                lastStatus: `신규 ${added} · 스킵 ${skippedExisting}${suspect ? ` · 손상의심 ${suspect}` : ''}`,
+            });
+        }
         const { pool } = store.clients(now(), config.onlineWindowMs);
         if (added) broadcastClientsSnapshot();
-        return sendJson(res, 200, { ok: true, added, skipped, skippedExisting, pool });
+        return sendJson(res, 200, { ok: true, added, skipped, skippedExisting, suspect, pool });
     }
 
     // POST /jobs/expand {seriesUrl, series} — 작품 메인 URL 자동 펼침 요청.

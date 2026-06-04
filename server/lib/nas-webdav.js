@@ -167,15 +167,21 @@ export async function scanNasSeries(opts) {
         }))
         .filter((e) => e.numKey);
 
-    const maxSize = rawFiles.reduce((m, f) => Math.max(m, f.size || 0), 0);
+    // 손상 판별: 임계값을 '최대크기' 대신 '중앙값(median) × ratio'로 계산한다.
+    //   유독 큰 회차 1개(합본/특집 등) 때문에 정상 회차들이 too-small로 오판되던 문제 방지.
+    //   파일이 1개뿐이어도 절대 최소크기(ABS_MIN)는 검사 → 0바이트/잘린 단일 파일도 거른다.
+    const ABS_MIN_BYTES = 1024;
+    const sizes = rawFiles.map((f) => f.size || 0).sort((a, b) => a - b);
+    const median = sizes.length ? sizes[Math.floor((sizes.length - 1) / 2)] : 0;
     const ratio = Math.max(0, Math.min(Number(opts.minSizeRatio ?? 0.5), 1));
-    const thresholdBytes = rawFiles.length > 1 ? Math.floor(maxSize * ratio) : 0;
+    const thresholdBytes =
+        rawFiles.length > 1 ? Math.max(ABS_MIN_BYTES, Math.floor(median * ratio)) : ABS_MIN_BYTES;
     const files = rawFiles.map((f) => ({
         ...f,
-        valid: f.size >= thresholdBytes,
-        reason: f.size >= thresholdBytes ? 'ok' : 'too-small',
+        valid: (f.size || 0) >= thresholdBytes,
+        reason: (f.size || 0) >= thresholdBytes ? 'ok' : 'too-small',
     }));
-    return { folderUrl, category, series, thresholdBytes, files };
+    return { folderUrl, category, series, thresholdBytes, median, files };
 }
 
 function basicAuth(user, pass) {

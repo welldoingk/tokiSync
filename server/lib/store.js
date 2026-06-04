@@ -193,6 +193,7 @@ export class Store {
                 addedAt: now,
                 lastRun: 0,
                 lastNew: 0,
+                lastSkipped: 0,
                 lastStatus: '',
                 enabled: true,
             };
@@ -216,6 +217,7 @@ export class Store {
         if (typeof patch.enabled === 'boolean') sub.enabled = patch.enabled;
         if (typeof patch.lastRun === 'number') sub.lastRun = patch.lastRun;
         if (typeof patch.lastNew === 'number') sub.lastNew = patch.lastNew;
+        if (typeof patch.lastSkipped === 'number') sub.lastSkipped = patch.lastSkipped;
         if (typeof patch.lastStatus === 'string') sub.lastStatus = patch.lastStatus;
         if (typeof patch.series === 'string') sub.series = patch.series;
         if (typeof patch.category === 'string') sub.category = patch.category;
