@@ -9,7 +9,7 @@ import { TxtBuilder } from './txt.js';
 import { fetchHistory } from './gas.js';
 import { ParserFactory } from './parsers/ParserFactory.js';
 import { getOAuthToken, fetchHistoryDirect } from './network.js';
-import { startRemoteSync, registerRemoteMenu } from './remote.js';
+import { registerLanCustomMenus, startLanCustomRuntime, testLanNativeDownload } from './lan-custom-runtime.js';
 
 import { getCommonPrefix, blobToArrayBuffer, saveFile } from './utils.js';
 
@@ -156,8 +156,8 @@ export async function main() {
         GM_registerMenuCommand('🌐 Viewer 열기', openViewer);
     }
 
-    // -- 1-b. 원격 제어(멀티-IP lease) GM 메뉴 등록 (top window 한정, registerRemoteMenu 내부 가드) --
-    registerRemoteMenu();
+    // -- 1-b. LAN custom hooks: 원격 제어(멀티-IP lease) GM 메뉴 등록 --
+    registerLanCustomMenus();
 
     // -- 2. Pre-detection & Core States --
     const siteInfo = await detectSite();
@@ -264,16 +264,7 @@ export async function main() {
         migrateFilenames: runFilenameMigration,
         migrateThumbnails: runThumbnailMigration,
         syncHistory: syncHistory,
-        testNativeDownload: async () => {
-            try {
-                const testBlob = new Blob(["TokiSync Native Mode Test File"], { type: "text/plain" });
-                await saveFile(testBlob, "test", "native", "txt", { folderName: "_Test" });
-                return true;
-            } catch (e) {
-                console.error("[Native Test Failed]", e);
-                return false;
-            }
-        },
+        testNativeDownload: async () => testLanNativeDownload(saveFile),
         testExtraction: async () => {
             try {
                 const logger = LogBox.getInstance();
@@ -439,9 +430,8 @@ export async function main() {
         }
     });
 
-    // -- 원격 제어(멀티-IP lease) 폴링 시작 (top window 한정, 설정 활성화 시에만 가동) --
-    //    내부에서 enabled/url 미설정·worker 창이면 즉시 무시. lease 모드면 큐 스케줄러도 1회 init.
-    try { startRemoteSync(); } catch (e) { console.warn('[TokiSync] 원격 동기화 시작 실패:', e); }
+    // -- LAN custom hooks: 원격 제어(멀티-IP lease) 폴링 시작 --
+    startLanCustomRuntime();
 
     // Initial load
     console.log('[TokiSync] Starting history sync...');

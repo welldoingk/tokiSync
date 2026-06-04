@@ -56,7 +56,7 @@ export async function processItem(item, builder, siteInfo, iframe, parser, serie
                 novelFormat: config.novelFormat || 'epub',
                 matchedRule: parser.rule,
                 protocolDomain: parser.protocolDomain,
-                scanSpeedMultiplier: config.scanSpeed / 750,
+                scanSpeedMultiplier: config.scanSpeed / 1000,
                 localNameTemplate: config.localNameTemplate,
                 localEpisodePadding: config.localEpisodePadding
             });
@@ -89,7 +89,7 @@ export async function processItem(item, builder, siteInfo, iframe, parser, serie
                 destination: destination,
                 matchedRule: parser.rule,
                 protocolDomain: parser.protocolDomain,
-                scanSpeedMultiplier: config.scanSpeed / 750,
+                scanSpeedMultiplier: config.scanSpeed / 1000,
                 localNameTemplate: config.localNameTemplate,
                 localEpisodePadding: config.localEpisodePadding
             });

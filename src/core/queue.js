@@ -4,6 +4,14 @@
  */
 
 import { LogBox } from './ui.js';
+import {
+  extendLanQueueItem,
+  focusLanWorkerPopup,
+  getLanQueueItemMetadataUpdates,
+  markLanPopupSlotReused,
+  recoverLanOrphanProcessing,
+  shouldBlockForLanQueuePolicy
+} from './lan-custom-queue.js';
 
 export const WORKER_STAGE = {
   INIT: 'STAGE_INIT',             // 초기화 및 Handshake 대기 중
@@ -18,8 +26,6 @@ export const WORKER_STAGE = {
 
 const STORAGE_KEY = 'tokisync_download_queue';
 const MAX_CONCURRENCY = 2; // 최대 동시 다운로드 수
-const LEASE_MAX_CONCURRENCY = 1; // 멀티-IP lease 모드는 보유 수와 실행 수를 분리해 클라당 1개씩 처리
-const ORPHAN_PROCESSING_GRACE_MS = 15000;
 
 // 임시 팝업 창 참조 보관용 맵 (Liveness check 및 재활용 루프 대비)
 export const activeWorkers = new Map();
@@ -55,8 +61,6 @@ const saveRawQueue = (queue) => {
     console.error('[TokiSync Queue] Failed to save queue to storage:', e);
   }
 };
-
-const isLeaseQueueItem = (item) => !!(item && item.unitId);
 
 // 32비트 FNV-1a 해시를 36진수 아스키 문자열로 변환하여 한글 유실 없는 고유 아스키 ID 보장
 function tokiHash(str) {
@@ -100,7 +104,7 @@ export const addEpisodesToQueue = (episodes, novelTitle) => {
     // 이미 존재하는지 중복성 검사
     const existingIndex = queue.findIndex(item => item.id === id);
     if (existingIndex === -1) {
-      queue.push({
+      queue.push(extendLanQueueItem({
         id,
         title: novelTitle,
         episodeTitle: ep.title,
@@ -114,60 +118,16 @@ export const addEpisodesToQueue = (episodes, novelTitle) => {
         novelFormat: ep.novelFormat || 'epub',
         matchedRule: ep.matchedRule || {},
         protocolDomain: ep.protocolDomain || '',
-        unitId: ep.unitId || '',                  // 멀티-IP lease 서버 unit.id — 완료 /complete 매핑용
-        cover: ep.cover || '',                    // lease 자동 펼침 메타: EPUB cover 삽입용
-        meta: ep.meta || null,                    // lease 자동 펼침 메타: ComicInfo/EPUB metadata용
-        series: ep.series || ep.rootFolder || '',
         status: 'pending',
         progressPercent: 0,
         stage: WORKER_STAGE.INIT,
         retryCount: 0,
-        reported: false,
         addedAt: Date.now()
-      });
+      }, ep));
       addedCount++;
     } else {
       const existing = queue[existingIndex];
-      const metadataUpdates = {};
-
-      // 기존 버전에서 lease 메타가 누락된 큐 항목을 중복 주입 시점에 보강한다.
-      // lease 재투입 항목은 completed/failed terminal 상태로 남아 있으면 서버 leased 상태와 어긋나므로 pending으로 되살린다.
-      if (ep.unitId && existing.unitId !== ep.unitId) {
-        metadataUpdates.unitId = ep.unitId;
-        metadataUpdates.reported = false;
-      }
-      if (ep.cover && !existing.cover) metadataUpdates.cover = ep.cover;
-      if (ep.meta && !existing.meta) metadataUpdates.meta = ep.meta;
-      if ((ep.series || ep.rootFolder) && !existing.series) metadataUpdates.series = ep.series || ep.rootFolder;
-      if (ep.unitId && (existing.status === 'completed' || existing.status === 'failed')) {
-        Object.assign(metadataUpdates, {
-          title: novelTitle,
-          episodeTitle: ep.title,
-          episodeUrl: ep.url,
-          episodeNum: ep.episodeNum || '',
-          folderId: ep.folderId || '',
-          category: ep.category || existing.category || 'Manga',
-          viewerCfg: ep.viewerCfg || {},
-          rootFolder: ep.rootFolder || '',
-          destination: ep.destination || 'local',
-          novelFormat: ep.novelFormat || 'epub',
-          matchedRule: ep.matchedRule || {},
-          protocolDomain: ep.protocolDomain || '',
-          unitId: ep.unitId,
-          cover: ep.cover || existing.cover || '',
-          meta: ep.meta || existing.meta || null,
-          series: ep.series || ep.rootFolder || existing.series || '',
-          status: 'pending',
-          progressPercent: 0,
-          stage: WORKER_STAGE.INIT,
-          retryCount: 0,
-          reported: false,
-          startedAt: 0,
-          lastProgressAt: 0,
-          completedAt: 0,
-          errorMsg: ''
-        });
-      }
+      const metadataUpdates = getLanQueueItemMetadataUpdates(existing, ep, novelTitle, WORKER_STAGE);
 
       if (Object.keys(metadataUpdates).length > 0) {
         queue[existingIndex] = { ...existing, ...metadataUpdates };
@@ -404,19 +364,6 @@ const sleepJitter = (minMs, maxMs) => {
   return new Promise(resolve => setTimeout(resolve, delay));
 };
 
-const focusWorkerPopup = (popupRef, context = 'worker') => {
-  try {
-    if (popupRef && !popupRef.closed && typeof popupRef.focus === 'function') {
-      popupRef.focus();
-      console.log(`[Queue Scheduler] 🔎 ${context} 팝업 포커스 신호 전송`);
-      return true;
-    }
-  } catch (err) {
-    console.warn(`[Queue Scheduler] ${context} 팝업 포커스 실패:`, err);
-  }
-  return false;
-};
-
 /**
  * 1회성 스케줄링 기동 검사 (세마포어 알고리즘)
  */
@@ -460,26 +407,7 @@ export const runSchedulerOnce = async () => {
       }
     }
 
-    const now = Date.now();
-    let recoveredOrphans = false;
-    for (const item of queue) {
-      if (!item || item.status !== 'processing' || activeWorkers.has(item.id)) continue;
-      const startedAt = Number(item.startedAt || 0);
-      if (startedAt && now - startedAt < ORPHAN_PROCESSING_GRACE_MS) continue;
-
-      const nextRetry = (item.retryCount || 0) + 1;
-      console.warn(`[Queue Scheduler] ⚠️ 워커 참조 유실 orphan processing 복구: ${item.episodeTitle || item.id} (${nextRetry}/3)`);
-      updateQueueItem(item.id, {
-        status: nextRetry >= 3 ? 'failed' : 'pending',
-        retryCount: nextRetry,
-        stage: nextRetry >= 3 ? WORKER_STAGE.FAILED : WORKER_STAGE.INIT,
-        progressPercent: 0,
-        startedAt: 0,
-        lastProgressAt: 0,
-        errorMsg: '워커 팝업 참조가 유실되어 자동 복구했습니다.'
-      });
-      recoveredOrphans = true;
-    }
+    const recoveredOrphans = recoverLanOrphanProcessing(queue, activeWorkers, updateQueueItem, WORKER_STAGE);
     if (recoveredOrphans) {
       queue = getRawQueue();
     }
@@ -494,13 +422,8 @@ export const runSchedulerOnce = async () => {
       return;
     }
 
-    // 3. 동시성 임계값 도달 시 즉시 대기 차단
-    //    leaseMax는 서버에서 "보유할 작업 수"일 뿐, 클라이언트 실행 팝업 수가 아니다.
-    //    unitId가 있는 멀티-IP lease 작업은 클라당 1개씩 순차 처리해 팝업 난립을 막는다.
-    const leaseProcessingCount = currentProcessing.filter(isLeaseQueueItem).length;
-    const isNextLeaseItem = isLeaseQueueItem(nextItem);
-    if (currentProcessing.length >= MAX_CONCURRENCY ||
-        (isNextLeaseItem && leaseProcessingCount >= LEASE_MAX_CONCURRENCY)) {
+    // 3. LAN custom queue policy: 일반 동시성 + lease 항목 클라당 1개 제한.
+    if (shouldBlockForLanQueuePolicy(nextItem, currentProcessing, MAX_CONCURRENCY)) {
       isSchedulerRunning = false;
       return;
     }
@@ -546,8 +469,7 @@ export const runSchedulerOnce = async () => {
         // activeWorkers 정리 및 교체
         activeWorkers.delete(targetSlotId);
         activeWorkers.set(nextItem.id, recycledPopup);
-        closedCounts.delete(targetSlotId);
-        closedCounts.set(nextItem.id, 0);
+        markLanPopupSlotReused(closedCounts, targetSlotId, nextItem.id);
 
         try {
             // 기존 window.name을 다시 타겟으로 쓰면, 이전 릴레이에서 name이 바뀐 경우
@@ -558,13 +480,13 @@ export const runSchedulerOnce = async () => {
             } else {
                 recycledPopup.location.href = nextItem.episodeUrl;
             }
-            focusWorkerPopup(recycledPopup, '재사용');
+            focusLanWorkerPopup(recycledPopup, '재사용');
         } catch (err) {
             console.error('[Queue Scheduler] 기존 팝업 location.replace 실패, href 리다이렉션 시도:', err);
             try {
                 recycledPopup.location.href = nextItem.episodeUrl;
                 activeWorkers.set(nextItem.id, recycledPopup);
-                focusWorkerPopup(recycledPopup, '재사용 폴백');
+                focusLanWorkerPopup(recycledPopup, '재사용 폴백');
             } catch (hrefErr) {
                 console.error('[Queue Scheduler] 팝업 릴레이 강제 실패:', hrefErr);
             }
@@ -574,7 +496,7 @@ export const runSchedulerOnce = async () => {
         const popupRef = openEpisodePopup(nextItem.episodeUrl, nextItem.id);
         if (popupRef) {
             activeWorkers.set(nextItem.id, popupRef);
-            focusWorkerPopup(popupRef, '신규');
+            focusLanWorkerPopup(popupRef, '신규');
         } else {
             // 팝업 차단 등으로 창 생성 실패 시 즉시 failed 처리
             updateQueueItem(nextItem.id, { 

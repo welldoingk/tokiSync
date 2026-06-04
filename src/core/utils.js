@@ -1,5 +1,5 @@
 import { uploadToGAS } from './gas.js';
-import { uploadWebDav } from './webdav.js';
+import { tryLanSaveFile } from './lan-custom-storage.js';
 import { LogBox, Notifier } from './ui.js';
 
 export async function blobToArrayBuffer(blob) {
@@ -188,7 +188,14 @@ export async function waitForContent(targetWindow, maxWaitMs = 8000, viewerCfg =
     LogBox.getInstance().warn(`DOM 폴링 타임아웃 ${maxWaitMs}ms — 콘텐츠 미감지, 멈춰서 물 평가`, 'DOM:Poll');
 }
 
-export async function scrollToLoad(iframeDoc, stallTimeoutMs = 20000, viewerCfg = {}, multiplier = 1.0) {
+export async function scrollToLoad(iframeDoc, stallTimeoutMs = 20000, viewerCfg = {}, multiplier = 1.0, onHeartbeat = null) {
+    // 스크롤 진행 중 호출자(워커)에게 생존 신호를 전달한다. 스크롤 구간은 길지만 WORKER_PROGRESS IPC를
+    // 전혀 보내지 않아, 부모 컨트롤러의 SCROLL stall 타이머가 정상 워커를 오탐 종료하는 문제가 있었다.
+    const beat = (cur, total) => {
+        if (typeof onHeartbeat === 'function') {
+            try { onHeartbeat(cur, total); } catch (e) {}
+        }
+    };
     const win = iframeDoc.defaultView || iframeDoc.parentWindow;
     if (!win) return;
 
@@ -233,6 +240,7 @@ export async function scrollToLoad(iframeDoc, stallTimeoutMs = 20000, viewerCfg 
 
         for (let idx = 0; idx < pageElements.length; idx++) {
             const displayIdx = idx + 1;
+            beat(displayIdx, pageElements.length);
             
             // 해당 순번의 노드를 부드럽게 화면 중앙에 고정 (Intersection Observer 트리거)
             const initialEl = container.children[idx];
@@ -319,6 +327,7 @@ export async function scrollToLoad(iframeDoc, stallTimeoutMs = 20000, viewerCfg 
         for (let idx = 0; idx < validImages.length; idx++) {
             const img = validImages[idx];
             const displayIdx = idx + 1;
+            beat(displayIdx, validImages.length);
 
             img.scrollIntoView({ behavior, block: 'center' });
             if (isHidden) win.dispatchEvent(new Event('scroll'));
@@ -441,6 +450,16 @@ export async function saveFile(data, filename, type = 'local', extension = 'zip'
         content = await data; // Unbox promise or use blob directly
     }
 
+    const lanSave = await tryLanSaveFile({
+        content,
+        type,
+        extension,
+        metadata,
+        fullFileName,
+        logger: (type === 'native' || type === 'webdav') ? LogBox.getInstance() : null
+    });
+    if (lanSave.handled) return lanSave.value;
+
     if (type === 'local') {
         console.log(`[Local] 다운로드 중... (${fullFileName})`);
         const link = document.createElement("a");
@@ -450,20 +469,6 @@ export async function saveFile(data, filename, type = 'local', extension = 'zip'
         URL.revokeObjectURL(link.href);
         link.remove();
         console.log(`[Local] 완료`);
-    } else if (type === 'native') {
-        // [LAN custom] "자동 분류"(native) 정책 = NAS WebDAV 직접 업로드 (구 GM_download 대체).
-        //   경로: <webdavUrl>/<category>/<folderName>/<fullFileName>. (uploadWebDav 가 컬렉션 자동 생성)
-        const folderName = metadata.folderName || "TokiSync";
-        const category = metadata.category || (extension === 'epub' ? 'Novel' : 'Webtoon');
-        const logger = LogBox.getInstance();
-
-        try {
-            await uploadWebDav(content, category, folderName, fullFileName);
-            return true;
-        } catch (err) {
-            logger.error(`[WebDAV] 업로드 실패: ${err.message}`);
-            throw err;
-        }
     } else if (type === 'drive') {
         const logger = LogBox.getInstance();
         logger.log(`[Drive] 구글 드라이브 업로드 준비 중... (${fullFileName})`);

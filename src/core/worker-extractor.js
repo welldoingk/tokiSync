@@ -11,6 +11,16 @@ import { updateQueueItem, WORKER_STAGE } from './queue.js';
 import { registerIpcListener, sendToParent } from './ipc-broker.js';
 import { GenericParser } from './parsers/GenericParser.js';
 import { fetchNovelTextViaApi } from './novel-decryptor.js';
+import {
+    MIN_LAN_COMIC_IMAGE_COUNT,
+    buildLanCoverObject,
+    collectLanPageDiagnostics,
+    getLanComicBuildMetadata,
+    getLanNovelBuildMetadata,
+    getLanSaveTarget,
+    getLanStorageCategory,
+    sendLanDiagnostics
+} from './lan-custom-extraction.js';
 
 // Define localized stage reporting helper
 function reportProgress(queueId, percent, stage, extra = {}) {
@@ -27,96 +37,24 @@ function reportProgress(queueId, percent, stage, extra = {}) {
     });
 }
 
-function queryAllSafe(doc, selector) {
-    try { return selector ? Array.from(doc.querySelectorAll(selector)) : []; }
-    catch { return []; }
-}
-
-function collectPageDiagnostics(viewerCfg = {}, extra = {}) {
-    const doc = document;
-    const imageItem = viewerCfg.imageItem || 'img';
-    const imageSelector = viewerCfg.imageContainer
-        ? viewerCfg.imageContainer.split(',').map(c => `${c.trim()} ${imageItem}`).join(', ')
-        : '.view-padding div img, .viewer-main img, #v_content img, .img-tag, img';
-    const containerSelector = viewerCfg.imageContainer || '.view-padding, .viewer-main, #v_content';
-    const novelSelector = viewerCfg.novelContent || '#novel_content';
-    const allImgs = queryAllSafe(doc, imageSelector);
-    const containers = queryAllSafe(doc, containerSelector);
-    const srcOf = (img) => img.currentSrc || img.src || img.getAttribute('data-src') || img.getAttribute('data-lazy') || img.getAttribute('data-original') || '';
-    const isDummySrc = (src) => {
-        if (!src || src.startsWith('data:image')) return true;
-        const lower = src.toLowerCase();
-        return ['blank.gif', 'loading.gif', 'loading-image.gif', 'pixel.gif', 'spacer.gif', 'transparent.gif', '1x1.gif', 'dot.gif']
-            .some(p => lower.includes(p));
-    };
-    const srcs = allImgs.map(srcOf);
-    const validImgs = srcs.filter(src => src && !isDummySrc(src));
-    const novelEl = queryAllSafe(doc, novelSelector)[0] || null;
-    const ttsText = typeof window.__novelTTSText === 'string' ? window.__novelTTSText : '';
-    const cf = !!(
-        doc.title.includes('Just a moment') ||
-        doc.getElementById('cf-challenge-running') ||
-        doc.querySelector('.cf-browser-verification') ||
-        doc.getElementById('challenge-running')
-    );
-    const captcha = !!(
-        doc.querySelector('fieldset#captcha, fieldset.captcha') ||
-        doc.querySelector('img.captcha_img, img[src*="kcaptcha_image.php"]') ||
-        doc.querySelector('form[action*="captcha_check.php"]') ||
-        doc.querySelector('iframe[src*="hcaptcha"]') ||
-        doc.querySelector('.g-recaptcha')
-    );
-
-    let nav = null;
-    try {
-        const entry = performance.getEntriesByType && performance.getEntriesByType('navigation')[0];
-        if (entry) {
-            nav = {
-                type: entry.type,
-                duration: Math.round(entry.duration || 0),
-                domContentLoaded: Math.round(entry.domContentLoadedEventEnd || 0),
-                loadEnd: Math.round(entry.loadEventEnd || 0)
-            };
-        }
-    } catch {}
-
-    return {
-        href: location.href,
-        title: doc.title || '',
-        readyState: doc.readyState,
-        visibility: doc.visibilityState,
-        hasFocus: typeof doc.hasFocus === 'function' ? doc.hasFocus() : null,
-        bodyChildren: doc.body ? doc.body.children.length : 0,
-        bodyTextLen: doc.body ? (doc.body.innerText || doc.body.textContent || '').trim().length : 0,
-        containers: containers.length,
-        containerChildren: containers.reduce((sum, el) => sum + (el.children ? el.children.length : 0), 0),
-        imageSelector,
-        imgCount: allImgs.length,
-        validImgCount: validImgs.length,
-        dummyImgCount: srcs.filter(isDummySrc).length,
-        completeImgCount: allImgs.filter(img => img.complete && img.naturalWidth > 0).length,
-        lazyAttrCount: allImgs.filter(img => img.getAttribute('data-src') || img.getAttribute('data-lazy') || img.getAttribute('data-original')).length,
-        firstImg: validImgs[0] || srcs[0] || '',
-        novelFound: !!novelEl,
-        novelTextLen: novelEl ? (novelEl.innerText || novelEl.textContent || '').trim().length : 0,
-        ttsTextLen: ttsText.trim().length,
-        cloudflare: cf,
-        captcha,
-        nav,
-        ...extra
-    };
-}
-
 function sendDiagnostics(queueId, phase, viewerCfg = {}, extra = {}) {
-    try {
-        sendToParent('WORKER_DIAGNOSTICS', {
-            queueId,
-            phase,
-            diagnostics: collectPageDiagnostics(viewerCfg, extra)
-        });
-    } catch (e) {
-        console.warn('[TokiSync:Worker] 진단 정보 전송 실패:', e.message);
-    }
+    sendLanDiagnostics(sendToParent, queueId, phase, viewerCfg, extra);
+}
+
+function makeZipProgressReporter(queueId, stage, startPercent, endPercent) {
+    let lastEmitAt = 0;
+    let lastPercent = startPercent;
+    return (meta = {}) => {
+        const raw = Number(meta.percent);
+        if (!Number.isFinite(raw)) return;
+        const next = Math.min(endPercent, Math.max(startPercent, startPercent + ((endPercent - startPercent) * raw / 100)));
+        const rounded = Math.round(next);
+        const now = Date.now();
+        if (rounded === lastPercent && now - lastEmitAt < 1500) return;
+        lastPercent = rounded;
+        lastEmitAt = now;
+        reportProgress(queueId, rounded, stage);
+    };
 }
 
 /**
@@ -159,7 +97,7 @@ export function initWorkerExtractor() {
             
             if (isCloudflare) {
                 console.warn("⚠️ [TokiSync:Worker] 클라우드플레어 보안 챌린지 감지 - 대기 모드 진입");
-                const diagnostics = collectPageDiagnostics({}, { detectedBy: 'cloudflare' });
+                const diagnostics = collectLanPageDiagnostics({}, { detectedBy: 'cloudflare' });
                 sendDiagnostics(queueId, 'captcha-detected', {}, { detectedBy: 'cloudflare' });
                 sendToParent('CAPTCHA_DETECTED', { queueId, diagnostics });
                 return;
@@ -207,7 +145,7 @@ export function initWorkerExtractor() {
                 // NAS/저장 카테고리는 룰 원본(Webtoon/Manga/Novel)을 쓴다.
                 //   targetType 은 novel/comic 2분류라 Webtoon↔Manga 구분이 사라지고,
                 //   소문자라 Synology 에서 기존 대문자 폴더와 대소문자 충돌(UploadDBCaseConflict)을 유발한다.
-                const storageCategory = (matchedRule && matchedRule.category) || (targetType === 'novel' ? 'Novel' : 'Webtoon');
+                const storageCategory = getLanStorageCategory(matchedRule, targetType);
                 
                 // Final Filename: Dynamic based on Template or Drive fallback
                 let fullFilename;
@@ -330,28 +268,18 @@ export function initWorkerExtractor() {
 
                     // [표지] 소설 EPUB: 시리즈 목록에서 동봉된 cover URL 을 받아 blob 화 → EpubBuilder 에 전달.
                     //   Kavita 는 파일명 "cover" 인 이미지를 표지로 사용(epub.js 에서 cover.<ext> 삽입).
-                    let coverObj = null;
-                    if (cover && configNovelFormat !== 'txt') {
-                        try {
-                            const cb = await fetchBlobWithXHR(cover, window.location.href);
-                            if (cb && cb.size > 0) coverObj = { blob: cb, type: cb.type || 'image/jpeg' };
-                        } catch (e) {
-                            console.warn(`[TokiSync:Worker] 표지 다운로드 실패(무시): ${e.message}`);
-                        }
-                    }
+                    const coverObj = await buildLanCoverObject(cover, configNovelFormat, fetchBlobWithXHR, window.location.href);
 
                     const zip = await builder.build({
                         series: seriesTitle,
                         title: episodeTitle,
                         number: episodeNum,
-                        writer: (meta && meta.author) || 'TokiSync',
-                        author: (meta && meta.author) || '',
-                        summary: (meta && meta.summary) || '',
-                        status: (meta && meta.status) || '',
-                        tags: (meta && meta.tags) || [],
-                        cover: coverObj
+                        ...getLanNovelBuildMetadata(meta, coverObj)
                     });
-                    blob = await zip.generateAsync({ type: 'blob' });
+                    blob = await zip.generateAsync(
+                        { type: 'blob' },
+                        makeZipProgressReporter(queueId, WORKER_STAGE.PARSING, 70, 89)
+                    );
 
                 } 
                 // --- 2. MANHWA EXTRACTION ---
@@ -373,8 +301,14 @@ export function initWorkerExtractor() {
                     console.log("[TokiSync:Worker] 스크롤 로드 및 이미지 다운로드 활성화");
                     reportProgress(queueId, 40, WORKER_STAGE.SCROLLING);
 
+                    // 스크롤 중 주기적 heartbeat: 부모 컨트롤러의 lastProgressAt을 갱신해, 정상이지만
+                    // IPC-무전송인 스크롤 구간이 SCROLL stall 타이머에 오탐 종료되는 것을 방지한다.
+                    const scrollHeartbeat = () => {
+                        try { reportProgress(queueId, 40, WORKER_STAGE.SCROLLING); } catch (e) {}
+                    };
+
                     // Physical scroll down
-                    await scrollToLoad(document, 25000, viewerCfg, scanSpeedMultiplier);
+                    await scrollToLoad(document, 25000, viewerCfg, scanSpeedMultiplier, scrollHeartbeat);
 
                     // Downloader helper with concurrency 5
                     const runImageDownloads = async (imageUrls) => {
@@ -425,28 +359,27 @@ export function initWorkerExtractor() {
                     };
 
                     // Execute initial fetch & download
-                    const MIN_COMIC_IMAGE_COUNT = 3;
                     let finalImages = parser.getImageList(document);
                     console.log(`🎯 [TokiSync:Worker] 1차 이미지 주소 ${finalImages.length}개 추출 완료.`);
                     sendDiagnostics(queueId, finalImages.length ? 'comic-image-list' : 'comic-image-list-empty', viewerCfg, {
                         finalImageCount: finalImages.length,
-                        minImageCount: MIN_COMIC_IMAGE_COUNT,
+                        minImageCount: MIN_LAN_COMIC_IMAGE_COUNT,
                         firstResolvedImage: finalImages[0] && finalImages[0].url ? finalImages[0].url : ''
                     });
-                    if (finalImages.length < MIN_COMIC_IMAGE_COUNT) {
+                    if (finalImages.length < MIN_LAN_COMIC_IMAGE_COUNT) {
                         console.warn(`[TokiSync:Worker] 이미지 ${finalImages.length}개 감지 - 추가 스크롤/재파싱 시도`);
                         reportProgress(queueId, 35, WORKER_STAGE.SCROLLING);
                         try { window.focus(); } catch (e) {}
                         await sleep(2000);
-                        await scrollToLoad(document, 15000, viewerCfg, scanSpeedMultiplier);
+                        await scrollToLoad(document, 15000, viewerCfg, scanSpeedMultiplier, scrollHeartbeat);
                         finalImages = parser.getImageList(document);
                         console.log(`🎯 [TokiSync:Worker] 이미지 부족 복구 재추출 결과: ${finalImages.length}개`);
-                        sendDiagnostics(queueId, finalImages.length >= MIN_COMIC_IMAGE_COUNT ? 'comic-image-list-recovered' : (finalImages.length ? 'comic-image-list-too-small' : 'comic-image-list-still-empty'), viewerCfg, {
+                        sendDiagnostics(queueId, finalImages.length >= MIN_LAN_COMIC_IMAGE_COUNT ? 'comic-image-list-recovered' : (finalImages.length ? 'comic-image-list-too-small' : 'comic-image-list-still-empty'), viewerCfg, {
                             finalImageCount: finalImages.length,
-                            minImageCount: MIN_COMIC_IMAGE_COUNT,
+                            minImageCount: MIN_LAN_COMIC_IMAGE_COUNT,
                             firstResolvedImage: finalImages[0] && finalImages[0].url ? finalImages[0].url : ''
                         });
-                        if (finalImages.length < MIN_COMIC_IMAGE_COUNT) {
+                        if (finalImages.length < MIN_LAN_COMIC_IMAGE_COUNT) {
                             throw new Error(`페이지 로딩 실패: 이미지가 ${finalImages.length}개라 빈/부분 CBZ 저장을 중단합니다.`);
                         }
                     }
@@ -463,11 +396,11 @@ export function initWorkerExtractor() {
                         reportProgress(queueId, 35, WORKER_STAGE.SCROLLING);
                         await sleep(2000);
                         
-                        await scrollToLoad(document, 15000, viewerCfg, scanSpeedMultiplier);
+                        await scrollToLoad(document, 15000, viewerCfg, scanSpeedMultiplier, scrollHeartbeat);
                         
                         finalImages = parser.getImageList(document);
                         console.log(`🎯 [Deep Fallback] 2차 이미지 주소 ${finalImages.length}개 재추출 완료.`);
-                        if (finalImages.length < MIN_COMIC_IMAGE_COUNT) {
+                        if (finalImages.length < MIN_LAN_COMIC_IMAGE_COUNT) {
                             throw new Error(`페이지 로딩 실패: 이미지가 ${finalImages.length}개라 빈/부분 CBZ 저장을 중단합니다.`);
                         }
                         downloadedData = await runImageDownloads(finalImages.map(img => img.url));
@@ -503,30 +436,47 @@ export function initWorkerExtractor() {
                         series: seriesTitle,
                         title: episodeTitle,
                         number: episodeNum,
-                        writer: (meta && meta.author) || 'TokiSync',
-                        summary: (meta && meta.summary) || '',
-                        status: (meta && meta.status) || '',
-                        tags: (meta && meta.tags) || [],
-                        category: storageCategory
+                        ...getLanComicBuildMetadata(meta, storageCategory)
                     });
-                    blob = await zip.generateAsync({ type: 'blob' });
+                    blob = await zip.generateAsync(
+                        { type: 'blob' },
+                        makeZipProgressReporter(queueId, WORKER_STAGE.PARSING, 85, 89)
+                    );
                 }
 
                 // --- 3. STORAGE PERSISTENCE (Direct Save/Upload) ---
                 // 저장 대상 라벨 + 실제 경로 — 진행 라벨/완료 로그/IPC 에 동봉해 대시보드에서 실제 경로 표시.
-                const _destLabel = (destination === 'native' || destination === 'webdav') ? 'NAS'
-                                 : (destination === 'drive') ? '드라이브' : '로컬';
-                const _savedPath = `${storageCategory}/${rootFolder || seriesTitle}/${fullFilename}.${extension}`;
-                console.log(`[TokiSync:Worker] I/O 드라이버 기동 - 저장소 적재 시작 (${destination} → ${_savedPath})`);
-                reportProgress(queueId, 90, WORKER_STAGE.UPLOADING, { destLabel: _destLabel, savedPath: _savedPath });
-
-                await saveFile(blob, fullFilename, destination || 'drive', extension, {
-                    folderName: rootFolder || seriesTitle,
-                    category: storageCategory,
-                    folderId: folderId || ''
+                const saveTarget = getLanSaveTarget({
+                    destination,
+                    storageCategory,
+                    rootFolder,
+                    seriesTitle,
+                    fullFilename,
+                    extension
+                });
+                console.log(`[TokiSync:Worker] I/O 드라이버 기동 - 저장소 적재 시작 (${destination} → ${saveTarget.savedPath})`);
+                reportProgress(queueId, 90, WORKER_STAGE.UPLOADING, {
+                    destLabel: saveTarget.destLabel,
+                    savedPath: saveTarget.savedPath
                 });
 
-                console.log(`[TokiSync:Worker] 🎉 에피소드 수집 & 저장 완착 완료! (${_destLabel}: ${_savedPath})`);
+                let uploadKeepAlive = null;
+                try {
+                    uploadKeepAlive = setInterval(() => {
+                        reportProgress(queueId, 90, WORKER_STAGE.UPLOADING, {
+                            destLabel: saveTarget.destLabel,
+                            savedPath: saveTarget.savedPath
+                        });
+                    }, 30000);
+                    await saveFile(blob, fullFilename, destination || 'drive', extension, {
+                        ...saveTarget.metadata,
+                        folderId: folderId || ''
+                    });
+                } finally {
+                    if (uploadKeepAlive) clearInterval(uploadKeepAlive);
+                }
+
+                console.log(`[TokiSync:Worker] 🎉 에피소드 수집 & 저장 완착 완료! (${saveTarget.destLabel}: ${saveTarget.savedPath})`);
 
                 // Update final queue status inside Dexie/GM storage
                 updateQueueItem(queueId, {
@@ -535,10 +485,17 @@ export function initWorkerExtractor() {
                     progressPercent: 100
                 });
 
-                reportProgress(queueId, 100, WORKER_STAGE.COMPLETED, { destLabel: _destLabel, savedPath: _savedPath });
+                reportProgress(queueId, 100, WORKER_STAGE.COMPLETED, {
+                    destLabel: saveTarget.destLabel,
+                    savedPath: saveTarget.savedPath
+                });
 
                 // Notify parent that task succeeded
-                sendToParent('TASK_COMPLETED', { queueId, destLabel: _destLabel, savedPath: _savedPath });
+                sendToParent('TASK_COMPLETED', {
+                    queueId,
+                    destLabel: saveTarget.destLabel,
+                    savedPath: saveTarget.savedPath
+                });
                 cleanupIpc();
 
             } catch (err) {

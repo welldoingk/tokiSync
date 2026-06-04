@@ -10,109 +10,19 @@ import { LogBox } from './ui.js';
 import { EventBus, EVT } from './EventBus.js';
 import { getConfig } from './config.js';
 import { refreshCacheAfterUpload } from './gas.js';
+import {
+    LAN_WORKER_STALL_TIMEOUTS,
+    focusLanWorkerWindow,
+    formatLanDiagnosticSummary,
+    formatLanStageText,
+    kickLanRemotePoll,
+    recoverStalledLanBatchWorker,
+    shouldCloseLanTerminalPopup,
+    shouldLogLanDiagnosticPhase
+} from './lan-custom-worker.js';
 
 // Reference for the single worker popup (used in sequential mode)
 let activeWorkerRef = null;
-
-function isLeaseQueueItem(item) {
-    return !!(item && item.unitId);
-}
-
-function focusWorkerWindow(workerRef, context = 'worker') {
-    try {
-        if (workerRef && !workerRef.closed && typeof workerRef.focus === 'function') {
-            workerRef.focus();
-            console.log(`[WorkerController] 🔎 ${context} 워커 팝업 포커스 신호 전송`);
-            return true;
-        }
-    } catch (err) {
-        console.warn(`[WorkerController] ${context} 워커 팝업 포커스 실패:`, err);
-    }
-    return false;
-}
-
-function kickRemotePoll(reason, queueId) {
-    try {
-        window.dispatchEvent(new CustomEvent('toki:remote-kick', {
-            detail: { reason, queueId, at: Date.now() }
-        }));
-    } catch (err) {
-        console.warn('[WorkerController] 원격 폴링 깨움 신호 실패:', err);
-    }
-}
-
-const PAGE_LOAD_STALL_TIMEOUT_MS = 90000;
-const DOM_READY_STALL_TIMEOUT_MS = 75000;
-const SCROLL_STALL_TIMEOUT_MS = 90000;
-const WORKER_PROGRESS_STALL_TIMEOUT_MS = 180000;
-const ORPHAN_PROCESSING_GRACE_MS = 15000;
-
-function shortText(value, maxLen = 90) {
-    const text = value == null ? '' : String(value);
-    return text.length > maxLen ? `${text.slice(0, maxLen)}...` : text;
-}
-
-function formatDiagnosticSummary(diagnostics) {
-    if (!diagnostics) return '';
-    const nav = diagnostics.nav ? `nav=${diagnostics.nav.type}/${diagnostics.nav.duration}ms` : '';
-    const flags = [
-        diagnostics.cloudflare ? 'cloudflare' : '',
-        diagnostics.captcha ? 'captcha' : '',
-        diagnostics.hasFocus === false ? 'no-focus' : '',
-        diagnostics.visibility && diagnostics.visibility !== 'visible' ? `visibility=${diagnostics.visibility}` : ''
-    ].filter(Boolean).join(',');
-    return [
-        `phase=${diagnostics.phase || 'unknown'}`,
-        `ready=${diagnostics.readyState || '-'}`,
-        flags ? `flags=${flags}` : '',
-        `body=${diagnostics.bodyTextLen || 0}`,
-        `container=${diagnostics.containers || 0}/${diagnostics.containerChildren || 0}`,
-        `img=${diagnostics.validImgCount || 0}/${diagnostics.imgCount || 0}`,
-        `complete=${diagnostics.completeImgCount || 0}`,
-        `dummy=${diagnostics.dummyImgCount || 0}`,
-        `lazy=${diagnostics.lazyAttrCount || 0}`,
-        diagnostics.ttsTextLen ? `tts=${diagnostics.ttsTextLen}` : '',
-        diagnostics.novelTextLen ? `novel=${diagnostics.novelTextLen}` : '',
-        nav,
-        diagnostics.title ? `title="${shortText(diagnostics.title, 60)}"` : '',
-        diagnostics.firstImg ? `firstImg="${shortText(diagnostics.firstImg, 90)}"` : ''
-    ].filter(Boolean).join(' · ');
-}
-
-function shouldLogDiagnosticPhase(phase) {
-    return /timeout|empty|captcha|cloudflare|suspicious|error|stalled/i.test(phase || '');
-}
-
-function recoverStalledBatchWorker(id, popupRef, item, reason, logger, closedCounts) {
-    try {
-        const actualRef = popupRef && (popupRef.ref || popupRef);
-        if (actualRef && !actualRef.closed) actualRef.close();
-    } catch (err) {
-        console.warn(`[WorkerController] [배치] 정체 워커 close 실패 (${id}):`, err);
-    }
-
-    activeWorkers.delete(id);
-    if (closedCounts) closedCounts.delete(id);
-
-    const nextRetry = (item.retryCount || 0) + 1;
-    const failed = nextRetry >= 3;
-    const diagnosticSummary = formatDiagnosticSummary(item.diagnostics);
-    const errorMsg = diagnosticSummary ? `${reason}; ${diagnosticSummary}` : reason;
-    updateQueueItem(id, {
-        status: failed ? 'failed' : 'pending',
-        retryCount: nextRetry,
-        stage: failed ? WORKER_STAGE.FAILED : WORKER_STAGE.INIT,
-        progressPercent: 0,
-        startedAt: 0,
-        lastProgressAt: 0,
-        errorMsg
-    });
-
-    const title = item.episodeTitle || item.title || id;
-    logger.warn(`[배치 정체복구] [${title}] ${errorMsg} → ${failed ? '실패 처리' : '재시도'} (${nextRetry}/3)`, 'Queue');
-    if (failed) kickRemotePoll('worker-finished', id);
-    runSchedulerOnce();
-}
 
 /**
  * Close active single worker popup window
@@ -159,7 +69,7 @@ async function fetchMediaViaWorkerSingleAttempt(episodeUrl, targetType = 'novel'
 
                 if (activeWorkerRef && !activeWorkerRef.closed) {
                     console.log(`[WorkerController] 📢 READY 수신 ➡️ 지시 주입 (유형: ${targetType})`);
-                    focusWorkerWindow(activeWorkerRef, '단일');
+                    focusLanWorkerWindow(activeWorkerRef, '단일');
                     
                     // Inject metadata bundle for local self-contained execution
                     sendToWorker(activeWorkerRef, 'START_EXTRACTION', {
@@ -199,13 +109,7 @@ async function fetchMediaViaWorkerSingleAttempt(episodeUrl, targetType = 'novel'
             if (type === 'WORKER_PROGRESS') {
                 const { percent, stage } = payload;
                 
-                let stageText = '대기 중';
-                if (stage === WORKER_STAGE.DOM_READY) stageText = '페이지 로딩';
-                else if (stage === WORKER_STAGE.SCROLLING) stageText = '스크롤 스캔';
-                else if (stage === WORKER_STAGE.PARSING) stageText = '미디어 파싱';
-                else if (stage === WORKER_STAGE.DOWNLOADING) stageText = '다운로드';
-                else if (stage === WORKER_STAGE.UPLOADING) stageText = payload.savedPath ? `${payload.destLabel || '드라이브'} 저장: ${payload.savedPath}` : '드라이브 저장';
-                else if (stage === WORKER_STAGE.COMPLETED) stageText = '완료';
+                const stageText = formatLanStageText(stage, payload, WORKER_STAGE);
 
                 EventBus.emit(EVT.LOG, {
                     msg: `[수집 진행] [${config.episodeTitle || '에피소드'}] -> ${stageText} (${Math.round(percent)}%)`,
@@ -273,7 +177,7 @@ async function fetchMediaViaWorkerSingleAttempt(episodeUrl, targetType = 'novel'
                     activeWorkerRef.location.href = episodeUrl;
                     activeWorkerRef.name = 'tokisync-novel-worker';
                 }
-                focusWorkerWindow(activeWorkerRef, '단일 재사용');
+                focusLanWorkerWindow(activeWorkerRef, '단일 재사용');
             } else {
                 console.log('[WorkerController] 신규 단일 워커 팝업 기동:', episodeUrl);
                 activeWorkerRef = window.open(
@@ -284,7 +188,7 @@ async function fetchMediaViaWorkerSingleAttempt(episodeUrl, targetType = 'novel'
                 if (!activeWorkerRef) {
                     throw new Error('브라우저 팝업 차단이 감지되었습니다.');
                 }
-                focusWorkerWindow(activeWorkerRef, '단일 신규');
+                focusLanWorkerWindow(activeWorkerRef, '단일 신규');
             }
         } catch (err) {
             cleanup();
@@ -403,7 +307,7 @@ export function initBatchWorkerController() {
                             tag: 'Queue',
                             level: 'error'
                         });
-                        if (nextRetry >= 3) kickRemotePoll('worker-finished', id);
+                        if (nextRetry >= 3) kickLanRemotePoll('worker-finished', id);
                         runSchedulerOnce();
                     }
                 }
@@ -422,8 +326,8 @@ export function initBatchWorkerController() {
                     const stage = item.stage || WORKER_STAGE.INIT;
                     const pageLoading = stage === WORKER_STAGE.INIT || stage === WORKER_STAGE.DOM_READY;
 
-                    if (pageLoading && percent < 20 && now - startedAt > PAGE_LOAD_STALL_TIMEOUT_MS) {
-                        recoverStalledBatchWorker(
+                    if (pageLoading && percent < 20 && now - startedAt > LAN_WORKER_STALL_TIMEOUTS.PAGE_LOAD) {
+                        recoverStalledLanBatchWorker(
                             id,
                             popupRef,
                             item,
@@ -431,8 +335,8 @@ export function initBatchWorkerController() {
                             logger,
                             batchClosedCounts
                         );
-                    } else if (stage === WORKER_STAGE.DOM_READY && percent <= 30 && now - lastProgressAt > DOM_READY_STALL_TIMEOUT_MS) {
-                        recoverStalledBatchWorker(
+                    } else if (stage === WORKER_STAGE.DOM_READY && percent <= 30 && now - lastProgressAt > LAN_WORKER_STALL_TIMEOUTS.DOM_READY) {
+                        recoverStalledLanBatchWorker(
                             id,
                             popupRef,
                             item,
@@ -440,8 +344,8 @@ export function initBatchWorkerController() {
                             logger,
                             batchClosedCounts
                         );
-                    } else if (stage === WORKER_STAGE.SCROLLING && percent <= 40 && now - lastProgressAt > SCROLL_STALL_TIMEOUT_MS) {
-                        recoverStalledBatchWorker(
+                    } else if (stage === WORKER_STAGE.SCROLLING && percent <= 40 && now - lastProgressAt > LAN_WORKER_STALL_TIMEOUTS.SCROLL) {
+                        recoverStalledLanBatchWorker(
                             id,
                             popupRef,
                             item,
@@ -449,8 +353,8 @@ export function initBatchWorkerController() {
                             logger,
                             batchClosedCounts
                         );
-                    } else if (percent < 100 && now - lastProgressAt > WORKER_PROGRESS_STALL_TIMEOUT_MS) {
-                        recoverStalledBatchWorker(
+                    } else if (percent < 100 && now - lastProgressAt > LAN_WORKER_STALL_TIMEOUTS.PROGRESS) {
+                        recoverStalledLanBatchWorker(
                             id,
                             popupRef,
                             item,
@@ -466,8 +370,8 @@ export function initBatchWorkerController() {
         for (const item of queue) {
             if (!item || item.status !== 'processing' || activeWorkers.has(item.id)) continue;
             const startedAt = Number(item.startedAt || 0);
-            if (startedAt && now - startedAt < ORPHAN_PROCESSING_GRACE_MS) continue;
-            recoverStalledBatchWorker(
+            if (startedAt && now - startedAt < LAN_WORKER_STALL_TIMEOUTS.ORPHAN_PROCESSING_GRACE) continue;
+            recoverStalledLanBatchWorker(
                 item.id,
                 null,
                 item,
@@ -516,7 +420,7 @@ export function initBatchWorkerController() {
                 
                 if (item) {
                     console.log(`[WorkerController] 📢 [배치] READY 수신 (ID: ${matchedId}) ➡️ START_EXTRACTION 주입`);
-                    focusWorkerWindow(sourceEvent.source, `배치 ${matchedId}`);
+                    focusLanWorkerWindow(sourceEvent.source, `배치 ${matchedId}`);
                     
                     sendToWorker(sourceEvent.source, 'START_EXTRACTION', {
                         queueId: item.id,
@@ -530,7 +434,7 @@ export function initBatchWorkerController() {
                         novelFormat: item.novelFormat || 'epub',
                         matchedRule: item.matchedRule || {},
                         protocolDomain: item.protocolDomain || window.location.origin,
-                        scanSpeedMultiplier: getConfig().scanSpeed / 750,
+                        scanSpeedMultiplier: getConfig().scanSpeed / 1000,
                         localNameTemplate: getConfig().localNameTemplate || "{number} - {title}",
                         localEpisodePadding: getConfig().localEpisodePadding || "4",
                         cover: item.cover || '',
@@ -583,8 +487,8 @@ export function initBatchWorkerController() {
                 const item = queue.find(i => i.id === matchedId);
                 const diag = { phase: phase || 'unknown', ...(diagnostics || {}) };
                 updateQueueItem(matchedId, { diagnostics: diag, lastDiagnosticAt: Date.now() });
-                const summary = formatDiagnosticSummary(diag);
-                if (item && summary && shouldLogDiagnosticPhase(phase)) {
+                const summary = formatLanDiagnosticSummary(diag);
+                if (item && summary && shouldLogLanDiagnosticPhase(phase)) {
                     logger.warn(`[진단] [${item.episodeTitle || item.title || matchedId}] ${summary}`, 'WorkerDiag');
                 } else if (summary) {
                     console.log(`[WorkerController] [진단] ${matchedId}: ${summary}`);
@@ -609,13 +513,7 @@ export function initBatchWorkerController() {
                 if (item) {
                     updateQueueItem(matchedId, { progressPercent: percent, stage: stage, lastProgressAt: Date.now() });
                     
-                    let stageText = '대기 중';
-                    if (stage === WORKER_STAGE.DOM_READY) stageText = '페이지 로딩';
-                    else if (stage === WORKER_STAGE.SCROLLING) stageText = '스크롤 스캔';
-                    else if (stage === WORKER_STAGE.PARSING) stageText = '미디어 파싱';
-                    else if (stage === WORKER_STAGE.DOWNLOADING) stageText = '다운로드';
-                    else if (stage === WORKER_STAGE.UPLOADING) stageText = payload.savedPath ? `${payload.destLabel || '드라이브'} 저장: ${payload.savedPath}` : '드라이브 저장';
-                    else if (stage === WORKER_STAGE.COMPLETED) stageText = '완료';
+                    const stageText = formatLanStageText(stage, payload, WORKER_STAGE);
 
                     EventBus.emit(EVT.LOG, {
                         msg: `[수집 진행] [${item.episodeTitle}] -> ${stageText} (${Math.round(percent)}%)`,
@@ -649,7 +547,7 @@ export function initBatchWorkerController() {
                     const pendingExists = queue.some(i => i.status === 'pending');
                     // lease 모드는 다음 poll에서 새 unit이 들어올 수 있으므로 completed 팝업을 릴레이 슬롯으로 보존한다.
                     // 그렇지 않으면 leaseMax 단위로 로컬 pending이 0이 되는 순간 창을 닫고, 다음 lease 때 새 팝업을 계속 만든다.
-                    if (!pendingExists && !isLeaseQueueItem(item)) {
+                    if (shouldCloseLanTerminalPopup(item, pendingExists)) {
                         popupRef.close();
                         activeWorkers.delete(matchedId);
                     }
@@ -659,7 +557,7 @@ export function initBatchWorkerController() {
                 
                 updateQueueItem(matchedId, { status: 'completed', progressPercent: 100, stage: WORKER_STAGE.COMPLETED });
                 logger.updateProgressUI();
-                kickRemotePoll('worker-finished', matchedId);
+                kickLanRemotePoll('worker-finished', matchedId);
                 EventBus.emit(EVT.UPDATE_PROGRESS);
 
                 // [배치 최종 갱신] 전 대기열 수집 완료 시 원격 드라이브 캐시 최종 갱신 수행
@@ -697,14 +595,21 @@ export function initBatchWorkerController() {
 
             if (matchedId) {
                 console.error(`[WorkerController] ❌ [배치] 수집 실패 (ID: ${matchedId}): ${errorMsg}`);
-                
+                // 워커 팝업은 devtools 차단으로 콘솔을 못 보므로, 실패 사유(특히 [WebDAV] 에러)를
+                // 대시보드/유저스크립트 로그에 노출해 원인 진단이 가능하게 한다.
+                EventBus.emit(EVT.LOG, {
+                    msg: `❌ 수집/NAS저장 실패: ${errorMsg || '원인 미상'}`,
+                    tag: 'Downloader',
+                    level: 'error'
+                });
+
                 const popupRef = activeWorkers.get(matchedId);
                 if (popupRef && !popupRef.closed) {
                     const queue = getQueue();
                     const item = queue.find(i => i.id === matchedId);
                     const pendingExists = queue.some(i => i.status === 'pending');
                     // lease 항목 실패도 재시도/재임대 흐름에서 같은 팝업 슬롯을 재사용할 수 있게 보존한다.
-                    if (!pendingExists && !isLeaseQueueItem(item)) {
+                    if (shouldCloseLanTerminalPopup(item, pendingExists)) {
                         popupRef.close();
                         activeWorkers.delete(matchedId);
                     }
@@ -724,7 +629,7 @@ export function initBatchWorkerController() {
                     logger.updateProgressUI();
                     EventBus.emit(EVT.UPDATE_PROGRESS);
                     if (nextRetry >= 3) {
-                        kickRemotePoll('worker-finished', matchedId);
+                        kickLanRemotePoll('worker-finished', matchedId);
                     }
                 }
 
