@@ -891,6 +891,7 @@
         // 레거시(단일 모드) + lease(멀티-IP) 둘 중 하나라도 온라인이면 "온라인"으로 표시
         const lease = await refreshClients();
         setPills(legacyOnline || !!(lease && lease.anyOnline), legacyRunning || !!(lease && lease.anyRunning));
+        refreshSubscriptions();
     }
 
     // 작업 투입 (/jobs)
@@ -1237,6 +1238,124 @@
         pollTimer = setInterval(refresh, getPollSec() * 1000);
     }
 
+    // ── 구독 자동 업데이트(크론) ──────────────────────────────────────────
+    function timeToCron(t) {
+        const [h, m] = String(t || '04:00').split(':').map((x) => parseInt(x, 10) || 0);
+        return `${m} ${h} * * *`;
+    }
+    function cronToTime(expr) {
+        const f = String(expr || '').trim().split(/\s+/);
+        if (f.length === 5 && /^\d+$/.test(f[0]) && /^\d+$/.test(f[1]) && f[2] === '*' && f[3] === '*' && f[4] === '*') {
+            return `${String(f[1]).padStart(2, '0')}:${String(f[0]).padStart(2, '0')}`;
+        }
+        return '';
+    }
+    function fmtAgo(ts) {
+        if (!ts) return '없음';
+        const s = Math.floor((Date.now() - ts) / 1000);
+        if (s < 60) return `${s}초 전`;
+        if (s < 3600) return `${Math.floor(s / 60)}분 전`;
+        if (s < 86400) return `${Math.floor(s / 3600)}시간 전`;
+        return `${Math.floor(s / 86400)}일 전`;
+    }
+    function applyCron(cron) {
+        if (!cron) return;
+        const en = $('subs-cron-enabled');
+        if (document.activeElement !== en) en.checked = !!cron.enabled;
+        const exprEl = $('subs-cron-expr');
+        if (document.activeElement !== exprEl) exprEl.value = cron.expr || '';
+        const timeEl = $('subs-cron-time');
+        const t = cronToTime(cron.expr);
+        if (t && document.activeElement !== timeEl) timeEl.value = t;
+        $('subs-cron-info').textContent = `${cron.enabled ? '✅ 활성' : '⏸ 비활성'} · ${cron.expr || '-'} · 마지막 실행 ${fmtAgo(cron.lastRun)}`;
+    }
+    function renderSubscriptions(data) {
+        const subs = data.subscriptions || [];
+        $('subs-count').textContent = subs.length;
+        const badge = $('subs-nas-badge');
+        if (data.nasReady) { badge.textContent = 'NAS 연결됨'; badge.className = 'pill on'; }
+        else { badge.textContent = 'NAS 미설정'; badge.className = 'pill off'; }
+        applyCron(data.cron);
+        const list = $('subs-list');
+        if (!subs.length) {
+            list.innerHTML = '<div class="empty">구독 없음 — NAS에서 가져오거나 작업을 투입하면 자동 등록됩니다.</div>';
+            return;
+        }
+        list.innerHTML = subs
+            .map(
+                (s) => `
+            <div class="sub-item${s.enabled ? '' : ' off'}">
+                <div class="sub-main">
+                    <div class="sub-title">${esc(s.series || s.seriesUrl)}</div>
+                    <div class="sub-sub muted">${esc(s.category || '?')} · <a href="${esc(s.seriesUrl)}" target="_blank" rel="noopener">${esc(s.seriesUrl)}</a></div>
+                    <div class="sub-meta muted">마지막 ${fmtAgo(s.lastRun)}${s.lastStatus ? ` · ${esc(s.lastStatus)}` : ''}</div>
+                </div>
+                <div class="sub-actions">
+                    <button class="small sub-toggle" data-url="${esc(s.seriesUrl)}" data-en="${s.enabled ? '1' : '0'}" title="${s.enabled ? '비활성화' : '활성화'}">${s.enabled ? '⏸' : '▶️'}</button>
+                    <button class="small sub-run" data-url="${esc(s.seriesUrl)}" title="지금 업데이트">⚡</button>
+                    <button class="small danger sub-del" data-url="${esc(s.seriesUrl)}" title="구독 삭제">🗑️</button>
+                </div>
+            </div>`
+            )
+            .join('');
+        list.querySelectorAll('.sub-toggle').forEach((b) => (b.onclick = () => toggleSub(b.dataset.url, b.dataset.en !== '1')));
+        list.querySelectorAll('.sub-run').forEach((b) => (b.onclick = () => runSubsNow(b.dataset.url)));
+        list.querySelectorAll('.sub-del').forEach((b) => (b.onclick = () => removeSub(b.dataset.url)));
+    }
+    async function refreshSubscriptions() {
+        try {
+            renderSubscriptions(await api('/subscriptions'));
+        } catch (e) { /* 패널 갱신 실패는 무시(연결 패널이 별도 표시) */ }
+    }
+    async function saveCron() {
+        const exprRaw = $('subs-cron-expr').value.trim();
+        const expr = exprRaw || timeToCron($('subs-cron-time').value || '04:00');
+        const enabled = $('subs-cron-enabled').checked;
+        try {
+            const r = await api('/subscriptions/cron', { method: 'POST', body: { expr, enabled } });
+            applyCron(r.cron);
+            toast('스케줄 저장됨');
+        } catch (e) { toast(`스케줄 저장 실패: ${e.message}`); }
+    }
+    async function runSubsNow(url) {
+        try {
+            const r = await api('/subscriptions/run-now', { method: 'POST', body: url ? { seriesUrl: url } : {} });
+            toast(`업데이트 트리거 ${r.triggered}건${r.triggered ? ' (온라인 클라가 펼침)' : ''}`);
+            refreshSubscriptions();
+        } catch (e) { toast(`실패: ${e.message}`); }
+    }
+    async function importSubsNas() {
+        try {
+            toast('NAS 스캔 중…');
+            const r = await api('/subscriptions/import-nas', { method: 'POST', body: {} });
+            toast(`가져오기 ${r.imported}건 (스킵 ${r.skipped})`);
+            refreshSubscriptions();
+        } catch (e) { toast(`가져오기 실패: ${e.message}`); }
+    }
+    async function addSub() {
+        const u = $('subs-add-url').value.trim();
+        if (!/^https?:\/\//i.test(u)) return toast('작품 메인 URL을 입력하세요');
+        try {
+            await api('/subscriptions', { method: 'POST', body: { seriesUrl: u } });
+            $('subs-add-url').value = '';
+            toast('구독 추가됨');
+            refreshSubscriptions();
+        } catch (e) { toast(`추가 실패: ${e.message}`); }
+    }
+    async function toggleSub(url, en) {
+        try {
+            await api('/subscriptions/toggle', { method: 'POST', body: { seriesUrl: url, enabled: en } });
+            refreshSubscriptions();
+        } catch (e) { toast(`실패: ${e.message}`); }
+    }
+    async function removeSub(url) {
+        if (!confirm('이 구독을 삭제할까요?')) return;
+        try {
+            await api('/subscriptions/remove', { method: 'POST', body: { seriesUrl: url } });
+            refreshSubscriptions();
+        } catch (e) { toast(`실패: ${e.message}`); }
+    }
+
     function init() {
         loadSettings();
         $('btn-add').onclick = addUrls;
@@ -1259,6 +1378,11 @@
         $('btn-nas-requeue').onclick = requeueNasSuggested;
         $('btn-nas-update').onclick = updateNasSeries;
         $('btn-nas-build-url').onclick = buildNasMainUrl;
+        // 구독 자동 업데이트 패널
+        $('btn-subs-cron-save').onclick = saveCron;
+        $('btn-subs-run').onclick = () => runSubsNow(null);
+        $('btn-subs-import').onclick = importSubsNas;
+        $('btn-subs-add').onclick = addSub;
         $('nas-category-list').onchange = () => {
             if ($('nas-category-list').value) {
                 $('nas-category').value = $('nas-category-list').value;

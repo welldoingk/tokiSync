@@ -636,3 +636,25 @@ body.light .log-stream { background: #14161b; }
 @media (max-width: 520px) {
     .nas-auth-grid { grid-template-columns: 1fr; }
 }
+
+/* ── 구독 자동 업데이트 패널 ── */
+.subs-sched { border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+.subs-list { display: grid; gap: 8px; }
+.sub-item {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 10px 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+}
+.sub-item.off { opacity: 0.55; }
+.sub-main { min-width: 0; flex: 1; }
+.sub-title { font-weight: 600; font-size: 14px; word-break: break-all; }
+.sub-sub { font-size: 12px; word-break: break-all; }
+.sub-sub a { color: var(--accent-2); text-decoration: none; }
+.sub-meta { font-size: 11px; margin-top: 2px; }
+.sub-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.sub-actions button { padding: 4px 9px; font-size: 13px; }

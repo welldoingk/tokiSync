@@ -90,6 +90,43 @@
             </div>
         </div>
 
+        <!-- ── 구독 자동 업데이트 (크론) ── -->
+        <div class="panel" id="subs-panel">
+            <h2>📅 구독 자동 업데이트 <span id="subs-nas-badge" class="pill off" style="font-size:11px">NAS 미설정</span></h2>
+            <div class="subs-sched">
+                <div class="switch-row">
+                    <label for="subs-cron-enabled">스케줄 활성화</label>
+                    <span class="switch"><input type="checkbox" id="subs-cron-enabled" /><span class="slider"></span></span>
+                </div>
+                <div class="settings-grid">
+                    <div>
+                        <label>매일 실행 시각</label>
+                        <input type="time" id="subs-cron-time" value="04:00" />
+                    </div>
+                    <div>
+                        <label>또는 크론식 (m h dom mon dow)</label>
+                        <input type="text" id="subs-cron-expr" placeholder="0 4 * * *" />
+                    </div>
+                </div>
+                <div class="row" style="margin-top:6px">
+                    <button id="btn-subs-cron-save" class="small">스케줄 저장</button>
+                    <button id="btn-subs-run" class="blue">⚡ 지금 전체 업데이트</button>
+                    <button id="btn-subs-import" class="small">📥 NAS에서 가져오기</button>
+                </div>
+                <div class="muted" id="subs-cron-info" style="font-size:12px"></div>
+            </div>
+            <div class="dsx-section" style="margin-top:10px">
+                <label>구독 수동 추가 (작품 메인 URL)</label>
+                <input type="text" id="subs-add-url" placeholder="예: https://sbxh4.com/novel/35155" />
+                <div class="row" style="margin-top:6px">
+                    <button id="btn-subs-add" class="small">➕ 구독 추가</button>
+                </div>
+            </div>
+            <h2 style="margin-top:12px">구독 목록 (<span id="subs-count">0</span>)</h2>
+            <div class="muted" style="font-size:12px;margin-bottom:6px">크론 시각에 각 구독 작품의 새 회차만 자동으로 풀에 투입됩니다(NAS 실파일 대비). 온라인 클라이언트가 1개 이상 필요합니다.</div>
+            <div id="subs-list" class="subs-list"><div class="empty">구독 없음 — NAS에서 가져오거나 작업을 투입하면 자동 등록됩니다.</div></div>
+        </div>
+
         <!-- ── NAS 저장 기준 업데이트/재시도 ── -->
         <div class="panel" id="nas-panel">
             <h2>🗄️ NAS 저장 기준 업데이트</h2>
