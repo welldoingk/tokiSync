@@ -305,8 +305,21 @@ export class GenericParser extends BaseParser {
                 if (t) { summary = t; break; }
             }
         }
+        // 작가 폴백 — 룰 author 셀렉터가 stale/미정의인 사이트 보완.
+        //   sbxh 소설 상세는 작가가 .nd-meta 의 <a> 링크에 있음(룰의 span:first-child는 이제 안 맞음).
+        //   .nd-meta 는 만화 페이지엔 없어 false-match 없음. 그래도 없으면 타이틀 "제목 - 작가 | 사이트" 파싱.
+        let author = this._extractValue(root, meta.author) || "";
+        if (!author) {
+            const a = root.querySelector('.nd-meta a');
+            author = a ? (a.innerText || a.textContent || '').trim() : '';
+        }
+        if (!author) {
+            const t = (root.title || (typeof document !== 'undefined' ? document.title : '') || '');
+            const seg = t.split(' - ')[1];
+            if (seg) author = seg.split('|')[0].trim();
+        }
         return {
-            author: this._extractValue(root, meta.author) || "",
+            author,
             status: this._extractValue(root, meta.status) || "연재중",
             summary,
             tags: this._extractTags(meta.tags, root)

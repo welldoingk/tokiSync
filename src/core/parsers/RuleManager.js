@@ -5,8 +5,103 @@ import { CFG_CUSTOM_RULES, CFG_REMOTE_RULE_URL } from '../config.js';
  * Manages parsing rules from built-in templates and user custom definitions.
  */
 export class RuleManager {
-    // Built-in rules as fallback/templates
-    static #builtInRules = [];
+    // Built-in rules as fallback/templates.
+    //   프로필별 GM 저장소(커스텀 룰)가 비었거나 원격 seed가 실패해도 항상 동작하는 baseline.
+    //   커스텀/원격 룰이 있으면 getRules()에서 그게 우선(override)된다. 소설 author는 stale 셀렉터
+    //   대신 실측 확인된 div.nd-meta a 로 박음(+ GenericParser 폴백과 이중 안전).
+    //   JSON.parse(String.raw``) 사용 — 정규식 백슬래시를 손상 없이 그대로 보존.
+    static #builtInRules = JSON.parse(String.raw`[
+  {
+    "id": "blacktoon_webtoon",
+    "name": "블랙툰 웹툰 전용 룰(내장)",
+    "urlPattern": ".*/webtoon/.*",
+    "category": "Webtoon",
+    "meta": {
+      "title": "h1.hero-v2-title",
+      "author": "div.hero-v2-author",
+      "thumb": { "selector": "div.hero-v2-thumb > img", "attr": "src" },
+      "status": "span.pill-status",
+      "tags": "div.hero-v2-tags"
+    },
+    "list": {
+      "container": "ul.ep-list-v2",
+      "item": "li.ep-row-v2",
+      "num": "span.ep-row-v2-no",
+      "title": ".ep-row-v2-title strong",
+      "sub": { "selector": "span.sub", "regex": "\\[(.*?)\\]" },
+      "link": { "selector": "a.ep-row-v2-link", "attr": "href" },
+      "date": "span.ep-row-v2-date"
+    },
+    "viewer": {
+      "fetchMethod": "iframe",
+      "imageRegex": "https?:\\\\/\\\\/[a-zA-Z0-9_.\\\\/-]+\\\\.(?:jpg|png|webp|gif)",
+      "imageContainer": "div.vw-imgs, main.vw-main",
+      "imageItem": "img",
+      "lazyAttrOptions": ["data-src", "data-lazy", "src"]
+    }
+  },
+  {
+    "id": "blacktoon_manhwa",
+    "name": "블랙툰 만화 전용 룰(내장)",
+    "urlPattern": ".*/manhwa/.*",
+    "category": "Manga",
+    "meta": {
+      "title": "h1.hero-v2-title",
+      "author": "div.hero-v2-author",
+      "thumb": { "selector": "div.hero-v2-thumb > img", "attr": "src" },
+      "status": "span.pill-status",
+      "tags": "div.hero-v2-tags"
+    },
+    "list": {
+      "container": "ul.ep-list-v2",
+      "item": "li.ep-row-v2",
+      "num": "span.ep-row-v2-no",
+      "title": ".ep-row-v2-title strong",
+      "sub": { "selector": "span.sub", "regex": "\\[(.*?)\\]" },
+      "link": { "selector": "a.ep-row-v2-link", "attr": "href" },
+      "date": "span.ep-row-v2-date"
+    },
+    "viewer": {
+      "fetchMethod": "iframe",
+      "imageRegex": "https?://[a-zA-Z0-9_./-]+\\.(?:jpg|png|webp|gif)",
+      "imageContainer": "div.vw-imgs, main.vw-main",
+      "imageItem": "img",
+      "lazyAttrOptions": ["data-src", "data-lazy", "src"]
+    }
+  },
+  {
+    "id": "blacktoon_novel",
+    "name": "블랙툰 소설 전용 룰(내장)",
+    "urlPattern": ".*/novel/.*",
+    "category": "Novel",
+    "meta": {
+      "title": "div.nd-info > h1",
+      "author": "div.nd-meta a",
+      "thumb": { "selector": "div.nd-thumb img", "attr": "src" },
+      "tags": "div.hero-v2-tags"
+    },
+    "list": {
+      "container": "ul.novel-eps",
+      "item": "li",
+      "num": "span.ne-num",
+      "title": "span.ne-title",
+      "sub": { "selector": "span.sub", "regex": "\\[(.*?)\\]" },
+      "link": { "selector": "a", "attr": "href" },
+      "date": "span.ne-date"
+    },
+    "viewer": {
+      "fetchMethod": "api",
+      "decryptApi": { "endpoint": "/api/novel-content", "cookieName": "nv", "clientHeader": "shadow-v2" },
+      "seriesTitle": "div.crumb a:last-of-type",
+      "episodeTitle": "h1.ne-h1",
+      "episodeNum": "div.crumb strong",
+      "novelContent": "article.novel-viewer",
+      "imageContainer": "article.novel-viewer",
+      "imageItem": "p",
+      "lazyAttrOptions": []
+    }
+  }
+]`);
 
     /**
      * Get all merged rules: Custom > Built-in
