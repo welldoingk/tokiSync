@@ -2,7 +2,7 @@
   "name": "tokisync",
   "version": "1.22.0",
   "components": {
-    "script": "1.22.0-multi.260604-1",
+    "script": "1.22.0-multi.260604-15",
     "viewer": "1.20.0",
     "gas": "1.9.41"
   },
@@ -14,7 +14,7 @@
   },
   "scripts": {
     "test": "node src/core/test-eventbus.js",
-    "serve-docs": "npx http-server docs --cors",
+    "serve-docs": "npx http-server docs --cors -p 8765",
     "build": "npm run build:viewer && npm run build:core && npm run build:gas",
     "build:core": "npx webpack --config webpack.core.config.cjs",
     "build:viewer": "npx vite build",

@@ -15,6 +15,27 @@
   - remote lease 설정 섹션
   - remote/custom rule 입력 섹션
   - 설정 초기화/자동 저장/저장 버튼 처리
+- `src/core/lan-custom-runtime.js`
+  - remote GM 메뉴 등록 hook
+  - remote polling/runtime 시작 hook
+  - NAS native 저장 테스트 hook
+- `src/core/lan-custom-storage.js`
+  - `native`/`webdav` 저장 정책을 NAS WebDAV 업로드로 연결
+  - 저장 카테고리 기본값 계산
+- `src/core/lan-custom-queue.js`
+  - lease 큐 item 메타 보강(`unitId`, `cover`, `meta`, `series`, `reported`)
+  - lease terminal item 재투입 시 pending 복원
+  - lease 동시 실행 수 제한
+  - orphan processing 복구와 팝업 slot 재사용 보조
+- `src/core/lan-custom-worker.js`
+  - batch worker 정체 복구 정책
+  - worker diagnostic summary/로그 필터
+  - remote poll wake 신호
+  - lease item의 terminal popup 보존 정책
+- `src/core/lan-custom-extraction.js`
+  - worker popup 진단 수집 payload
+  - LAN 저장 카테고리/저장 경로 계산
+  - lease cover/meta를 EPUB/CBZ builder metadata로 변환
 - `build/lan-custom.cjs`
   - LAN userscript metadata
   - package component version fallback
@@ -36,6 +57,22 @@
   - `populateLanSettings()`
   - `bindLanSettingsAutoSave()`
   - `saveDashboardSettings()`
+- `src/core/main.js`
+  - `registerLanCustomMenus()`
+  - `startLanCustomRuntime()`
+  - `testLanNativeDownload(saveFile)`
+- `src/core/utils.js`
+  - `tryLanSaveFile()` before upstream local/drive persistence
+- `src/core/queue.js`
+  - `extendLanQueueItem()`
+  - `getLanQueueItemMetadataUpdates()`
+  - `recoverLanOrphanProcessing()`
+  - `shouldBlockForLanQueuePolicy()`
+  - `focusLanWorkerPopup()` / `markLanPopupSlotReused()`
+- `src/core/worker-controller.js`
+  - `lan-custom-worker.js` helper imports for stall recovery, diagnostics, remote wake, popup close policy
+- `src/core/worker-extractor.js`
+  - `lan-custom-extraction.js` helper imports for diagnostics, metadata, save target
 - `webpack.core.config.cjs`
   - `resolveComponents()`
   - `resolveLanUserscriptMetadata()`
@@ -46,8 +83,8 @@
 
 1. Merge upstream in a clean worktree.
 2. Keep helper files above as the LAN source of truth.
-3. If upstream rewrites `config.js` or `ui.js`, reapply only the hook calls listed above.
-4. Do not copy long NAS/remote settings blocks back into upstream files.
+3. If upstream rewrites a touch point, reapply only the hook calls listed above.
+4. Do not copy long NAS/remote/lease policy blocks back into upstream files.
 5. Verify:
 
 ```bash
@@ -60,13 +97,8 @@ npm run build:core
 npm run build:viewer
 ```
 
-## Remaining Higher-Risk Areas
+## Remaining Higher-Risk Area
 
-아래 파일은 아직 동작 자체가 업스트림과 로컬 기능을 동시에 품고 있어 충돌 가능성이 남아 있다.
-
-- `src/core/worker-controller.js`
-- `src/core/worker-extractor.js`
-- `src/core/queue.js`
 - `src/core/downloader.js`
-
-이 파일들은 기능 안정화 후 별도 adapter로 더 분리할 수 있다.
+  - 아직 native/drive/local destination 결정과 개별 다운로드 저장 흐름을 upstream 로직 안에서 함께 처리한다.
+  - 다음 분리 대상은 destination 결정 helper 또는 downloader storage adapter다.

@@ -15,6 +15,7 @@ global.GM_setValue = (key, value) => { gmStorage[key] = value; };
 global.GM_registerMenuCommand = undefined;
 
 const queueMod = await import('../src/core/queue.js');
+const storageMod = await import('../src/core/lan-custom-storage.js');
 const {
   WORKER_STAGE,
   addEpisodesToQueue,
@@ -22,6 +23,7 @@ const {
   getQueue,
   updateQueueItem
 } = queueMod;
+const { tryLanSaveFile } = storageMod;
 
 function firstQueueItem() {
   const item = getQueue()[0];
@@ -72,6 +74,9 @@ item = firstQueueItem();
 updateQueueItem(item.id, { status: 'completed', stage: WORKER_STAGE.COMPLETED });
 addEpisodesToQueue([{ title: '1화', url: 'https://example.test/series/1', episodeNum: '0001' }], 'Series');
 assert.equal(firstQueueItem().status, 'completed');
+
+const localSaveProbe = await tryLanSaveFile({ type: 'local' });
+assert.deepEqual(localSaveProbe, { handled: false });
 
 const { Store } = await import('../server/lib/store.js');
 const tempDir = mkdtempSync(join(tmpdir(), 'tokisync-lease-'));
