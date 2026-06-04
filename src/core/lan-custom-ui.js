@@ -48,7 +48,7 @@ export function renderLanDashboardSettingsHtml() {
                     </div>
                     <div class="toki-control-group">
                         <label class="toki-label">컨트롤 API URL</label>
-                        <input type="text" id="toki-sel-remote-url" class="toki-input" placeholder="http://192.168.0.100:8787">
+                        <input type="text" id="toki-sel-remote-url" class="toki-input" placeholder="http://192.168.0.135:8787">
                     </div>
                     <div class="toki-control-group">
                         <label class="toki-label">API 토큰 (보안)</label>
