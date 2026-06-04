@@ -14,7 +14,10 @@ export function sendJson(res, status, obj) {
     res.end(body);
 }
 
-export function readJsonBody(req, limit = 1_000_000) {
+// 한도 16MB: 대형 시리즈의 회차 unit 목록을 한 번에 enqueue할 수 있어야 한다.
+//   (예: 3108회차 소설 → {units:[...]} 본문 ≈ 1.3MB. 1MB 한도면 req.destroy()로 소켓이
+//    끊겨 클라 GM_xmlhttpRequest가 "network error"로 실패했음 — 큰 작품 투입 불가 버그.)
+export function readJsonBody(req, limit = 16_000_000) {
     return new Promise((resolve, reject) => {
         let size = 0;
         const chunks = [];
