@@ -51,12 +51,22 @@ let _lastProgress = null;
 let _externalIp = '';   // 외부 IP(식별/검증용, 1회 조회 후 캐시)
 let _ipQueried = false;
 let _lastLogSeq = 0;    // 마지막으로 서버에 전송한 LogBox seq(로그 증분 전송 커서)
+let _lastWsLogSeq = 0;  // WebSocket 로그 전송 커서(heartbeat fallback 커서와 분리)
+let _logWs = null;
+let _logWsFlushTimer = null;
+let _logWsReconnectTimer = null;
+let _logWsNextAt = 0;
+let _lastWsReportAt = 0;
+let _wsReportInFlight = false;
 let _pollInFlight = false;
 let _pollQueued = false;
 let _lastKickAt = 0;
 let _lastPendingWakeAt = 0;
 const POLL_KICK_THROTTLE_MS = 750;
 const PENDING_WAKE_THROTTLE_MS = 10000;
+const WS_LOG_FLUSH_MS = 500;
+const WS_REPORT_FLUSH_MS = 1000;
+const WS_RECONNECT_MS = 2000;
 
 /** upstream 큐 status('completed'/'failed') 종결 판정. */
 function _isFinished(status) { return status === 'completed' || status === 'failed'; }
@@ -70,17 +80,24 @@ function _scriptVersion() {
     catch (e) { return ''; }
 }
 
-/** LogBox 의 새 로그(마지막 전송 이후)를 증분 수집 — heartbeat 에 동봉해 대시보드로 스트림한다. */
-function _collectLogsSince() {
+function _collectLogsAfter(lastSeq) {
     try {
         const lb = LogBox.getInstance();
         const all = (lb && lb.logs) || [];
+        const latestSeq = all.length ? (Number(all[all.length - 1].seq) || 0) : 0;
+        const cursor = latestSeq < lastSeq ? 0 : lastSeq; // 페이지 새로고침 등으로 LogBox seq가 리셋된 경우
         const out = all
-            .filter((l) => l.seq > _lastLogSeq)
+            .filter((l) => l.seq > cursor)
             .map((l) => ({ seq: l.seq, time: l.time, type: l.type || 'normal', msg: (l.context ? `[${l.context}] ` : '') + l.msg }));
-        if (out.length) _lastLogSeq = out[out.length - 1].seq;
-        return out;
-    } catch (e) { return []; }
+        return { logs: out, lastSeq: out.length ? out[out.length - 1].seq : latestSeq };
+    } catch (e) { return { logs: [], lastSeq }; }
+}
+
+/** LogBox 의 새 로그(마지막 전송 이후)를 증분 수집 — heartbeat 에 동봉해 대시보드로 스트림한다. */
+function _collectLogsSince() {
+    const r = _collectLogsAfter(_lastLogSeq);
+    if (r.logs.length) _lastLogSeq = r.lastSeq;
+    return r.logs;
 }
 
 function _gv(k, d) {
@@ -92,6 +109,183 @@ function _sv(k, v) {
 }
 
 function base(url) { return (url || '').replace(/\/+$/, ''); }
+
+function wsUrl(apiUrl) {
+    const u = new URL(base(apiUrl));
+    u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
+    u.pathname = '/ws';
+    u.search = '';
+    u.hash = '';
+    return u.toString();
+}
+
+function logWsOpen() {
+    return _logWs && _logWs.readyState === WebSocket.OPEN;
+}
+
+function sendLogWs(msg) {
+    if (!logWsOpen()) return false;
+    try {
+        _logWs.send(JSON.stringify(msg));
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function closeLogWs() {
+    if (_logWsReconnectTimer) {
+        clearTimeout(_logWsReconnectTimer);
+        _logWsReconnectTimer = null;
+    }
+    _logWsNextAt = 0;
+    if (_logWs) {
+        const ws = _logWs;
+        _logWs = null;
+        try {
+            ws.onclose = null;
+            ws.close();
+        } catch (e) {}
+    }
+}
+
+function scheduleLogWsReconnect() {
+    _logWsNextAt = Date.now() + WS_RECONNECT_MS;
+    if (_logWsReconnectTimer) return;
+    _logWsReconnectTimer = setTimeout(() => {
+        _logWsReconnectTimer = null;
+        const cfg = getRemoteConfig();
+        ensureLogWs(cfg);
+    }, WS_RECONNECT_MS);
+}
+
+function flushLogWs() {
+    if (!logWsOpen()) return;
+    const cfg = getRemoteConfig();
+    if (!cfg.enabled || !cfg.url || !cfg.clientId) return;
+    const r = _collectLogsAfter(_lastWsLogSeq);
+    if (!r.logs.length) return;
+    if (sendLogWs({
+        type: 'clientLogs',
+        clientId: cfg.clientId,
+        label: cfg.clientId,
+        ip: _externalIp || '',
+        version: _scriptVersion(),
+        logs: r.logs,
+    })) {
+        _lastWsLogSeq = r.lastSeq;
+    }
+}
+
+async function buildClientReport(cfg, includeLogs = false) {
+    const cur = getQueue();
+    const current = cur.filter((i) => i.unitId && (i.status === 'pending' || i.status === 'processing')).map((i) => i.unitId);
+    const processing = cur.filter((i) => i.unitId && i.status === 'processing').map((i) => i.unitId);
+    const queueSummary = cur.map((i) => ({
+        id: i.id,
+        status: i.status,
+        episodeNum: i.episodeNum,
+        episodeTitle: i.episodeTitle,
+        unitId: i.unitId,
+        progressPercent: i.progressPercent,
+        stage: i.stage || '',
+        startedAt: i.startedAt || 0,
+        lastProgressAt: i.lastProgressAt || 0,
+        retryCount: i.retryCount || 0,
+        errorMsg: i.errorMsg || ''
+    }));
+    return {
+        clientId: cfg.clientId,
+        label: cfg.clientId,
+        ip: await ensureExternalIp(),
+        queue: queueSummary,
+        running: processing.length > 0,
+        progress: _lastProgress,
+        current,
+        logs: includeLogs ? _collectLogsSince() : [],
+        version: _scriptVersion(),
+    };
+}
+
+async function flushReportWs(force = false) {
+    if (!logWsOpen() || _wsReportInFlight) return;
+    const t = Date.now();
+    if (!force && t - _lastWsReportAt < WS_REPORT_FLUSH_MS) return;
+    const cfg = getRemoteConfig();
+    if (!cfg.enabled || !cfg.url || !cfg.clientId) return;
+    _lastWsReportAt = t;
+    _wsReportInFlight = true;
+    try {
+        const report = await buildClientReport(cfg, false);
+        sendLogWs({ type: 'clientReport', clientId: cfg.clientId, report });
+    } catch (e) {
+        // WS 리포트는 보조 경로다. 실패 시 기존 /progress heartbeat가 상태를 보낸다.
+    } finally {
+        _wsReportInFlight = false;
+    }
+}
+
+function ensureLogWs(cfg) {
+    if (!_started || !cfg || !cfg.enabled || !cfg.url || !cfg.clientId) {
+        closeLogWs();
+        return false;
+    }
+    if (typeof WebSocket === 'undefined') return false;
+    if (Date.now() < _logWsNextAt) return false;
+    let target;
+    try { target = wsUrl(cfg.url); } catch (e) { return false; }
+    const key = `${target}|${cfg.clientId}|${cfg.token || ''}`;
+    if (_logWs && (_logWs.readyState === WebSocket.OPEN || _logWs.readyState === WebSocket.CONNECTING) && _logWs._key === key) {
+        return true;
+    }
+    closeLogWs();
+    try {
+        const ws = new WebSocket(target);
+        ws._key = key;
+        _logWs = ws;
+        ws.onopen = () => {
+            _logWsNextAt = 0;
+            sendLogWs({
+                type: 'hello',
+                role: 'client',
+                token: cfg.token || '',
+                clientId: cfg.clientId,
+                label: cfg.clientId,
+                ip: _externalIp || '',
+                version: _scriptVersion(),
+            });
+            if (!_ipQueried) ensureExternalIp().catch(() => {});
+            flushLogWs();
+            flushReportWs(true);
+        };
+        ws.onmessage = () => {};
+        ws.onclose = () => {
+            if (_logWs === ws) _logWs = null;
+            scheduleLogWsReconnect();
+        };
+        ws.onerror = () => {
+            try { ws.close(); } catch (e) {}
+        };
+        return true;
+    } catch (e) {
+        scheduleLogWsReconnect();
+        return false;
+    }
+}
+
+function startLogWsPump() {
+    if (_logWsFlushTimer) return;
+    _logWsFlushTimer = setInterval(() => {
+        const cfg = getRemoteConfig();
+        if (!_started || !cfg.enabled || !cfg.url || !cfg.clientId) {
+            closeLogWs();
+            return;
+        }
+        ensureLogWs(cfg);
+        flushLogWs();
+        flushReportWs();
+    }, WS_LOG_FLUSH_MS);
+}
 
 /** GM_xmlhttpRequest 기반 요청 (Promise). raw=true 면 응답 본문 문자열을 그대로 반환(HTML 등). */
 function gmRequest({ method, url, token, data, raw }) {
@@ -494,38 +688,12 @@ async function pollLease(cfg) {
     // ③ heartbeat — clientId/외부IP/진행률/보유 unit 보고(서버가 해당 클라의 모든 leased unit TTL 갱신).
     let hbRes = null;
     {
-        const cur = getQueue();
-        const current = cur.filter((i) => i.unitId && (i.status === 'pending' || i.status === 'processing')).map((i) => i.unitId);
-        const processing = cur.filter((i) => i.unitId && i.status === 'processing').map((i) => i.unitId);
-        const queueSummary = cur.map((i) => ({
-            id: i.id,
-            status: i.status,
-            episodeNum: i.episodeNum,
-            episodeTitle: i.episodeTitle,
-            unitId: i.unitId,
-            progressPercent: i.progressPercent,
-            stage: i.stage || '',
-            startedAt: i.startedAt || 0,
-            lastProgressAt: i.lastProgressAt || 0,
-            retryCount: i.retryCount || 0,
-            errorMsg: i.errorMsg || ''
-        }));
         try {
             hbRes = await gmRequest({
                 method: 'POST',
                 url: `${base(cfg.url)}/progress`,
                 token: cfg.token,
-                data: {
-                    clientId: cfg.clientId,
-                    label: cfg.clientId,
-                    ip: await ensureExternalIp(),
-                    queue: queueSummary,
-                    running: processing.length > 0,
-                    progress: _lastProgress,
-                    current,
-                    logs: _collectLogsSince(), // 새 로그 증분 동봉(대시보드 실시간 로그 패널용)
-                    version: _scriptVersion(), // 유저스크립트 버전(대시보드 클라 카드 표시 — 미업데이트 프로필 진단)
-                },
+                data: await buildClientReport(cfg, true),
             });
         } catch (e) {
             const m = e && e.message ? e.message : '';
@@ -638,11 +806,19 @@ function reconcileOwnedLeases(ownedLeaseIds) {
 }
 
 /** 큐 폴링 시작 (top window 한정) */
-export function startRemoteSync() {
+export function startRemoteSync(_retry = 0) {
     if (_started) return;
     if (window.self !== window.top) return;
     const cfg = getRemoteConfig();
-    if (!cfg.enabled || !cfg.url) return;
+    // Tampermonkey(MV3)는 document-start 시 GM 저장소가 아직 준비 안 돼 GM_getValue가 빈 기본값을
+    // 돌려주는 레이스가 있다 → 설정이 "날아간 듯" 보이고 원격 연결이 안 됨(폴링 시작조차 못 함).
+    // url이 비면 잠시 후 재시도해, 저장소가 준비되면 페이지 재로드 없이 자동 연결한다.
+    // (url은 있는데 enabled만 false면 사용자가 끈 것이므로 재시도하지 않는다.)
+    if (!cfg.url) {
+        if (_retry < 15) setTimeout(() => { try { startRemoteSync(_retry + 1); } catch (e) {} }, 1000);
+        return;
+    }
+    if (!cfg.enabled) return;
     _started = true;
 
     // upstream 이벤트 스케줄러 + 배치 IPC 라우터 1회 init. 중복 init 가드.
@@ -672,6 +848,7 @@ export function startRemoteSync() {
         if (ev && ev.data && ev.data.type === 'TOKI_CAPTCHA_DETECTED') onCaptcha();
     });
 
+    startLogWsPump();
     kickPoll('start', true);
     try { console.log(`[TokiSync-Remote] polling ${base(cfg.url)} every ${cfg.pollSec}s (+ event wake)`); } catch {}
 }
