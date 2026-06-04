@@ -7,37 +7,39 @@
 
 | 서비스 | 상태 | 포트/경로 | 비고 |
 |---|---|---|---|
-| **유저스크립트 LAN 서빙** | **항상 켜짐** | `python3 -m http.server 8765` (cwd = 프로젝트 루트, bind `0.0.0.0`) | win-c(Windows)에서 설치/업데이트 소스 |
-| **원격 제어 컨트롤 API** | **항상 켜짐 (systemd user)** | `server/control-api.js` 포트 **8787** | `tokisync-control-api.service` (zero-dep). 멀티-IP lease 오케스트레이터. 부팅 자동시작(linger) |
+| **원격 제어 컨트롤 API** | **항상 켜짐 (Proxmox LXC)** | `192.168.0.135:8787` — Proxmox VMID **135**(`tokisync-api`, systemd **system**) | `server/control-api.js` (zero-dep). 멀티-IP lease + NAS 업로드 릴레이 + **유저스크립트 자동업데이트 서빙**. 부팅 자동시작(onboot). 상세: `documentation/PROXMOX_MIGRATION.md` |
+| (레거시) 유저스크립트 8765 서빙 | 선택 | robocom `python3 -m http.server 8765` | 자동업데이트는 **.135:8787이 전담** → 옛 설치본 수동 재설치용으로만 잔존(없어도 무방) |
 
-- **호스트 LAN IP:** `192.168.0.100` (robocom 리눅스).
-- **유저스크립트 설치/업데이트 URL:** `http://192.168.0.100:8765/docs/tokiSync.user.js`
-  - 빌드 산출물(`docs/tokiSync.user.js`)이 곧 설치 소스. 8765 서버가 루트를 서빙하므로 `/docs/...` 경로.
-  - **8765 서버는 이미 떠 있으니 새로 띄우지 말 것**(중복 바인드 방지).
+- **컨트롤 API 호스트:** `192.168.0.135` (Proxmox LXC 135 `tokisync-api`). **robocom(`192.168.0.100`)은 빌드 전용으로 강등** — 컨트롤 API 서비스 정지·비활성(2026-06-05 마이그레이션 완료).
+- **유저스크립트 설치/업데이트 URL:** `http://192.168.0.135:8787/tokiSync.user.js`
+  - 컨트롤 API가 `../docs/tokiSync.user.js`를 직접 서빙. 배너 `@updateURL`도 이 주소 → 전 프로필 자동 갱신.
+  - 옛 설치본(@updateURL이 .100을 가리키던 것)은 새 주소에서 **1회 수동 재설치** 후 자동 갱신으로 전환.
 - 컨트롤 API는 **VPN 내부망 전제**(외부 노출/터널 없음). 토큰(`server/config.json`의 `token`) 설정 권장,
   내부망이면 **open 모드(토큰 빈값)**도 허용. config.json은 git 무시(시크릿).
 
-### 컨트롤 API 서비스 관리 (systemd user)
-- **유닛 파일:** `~/.config/systemd/user/tokisync-control-api.service` (repo 밖, git 무시). `WorkingDirectory=server/`, node 절대경로 + `control-api.js` 실행. `Restart=on-failure`.
-- **관리 명령:**
+### 컨트롤 API 서비스 관리 (Proxmox LXC 135, systemd system)
+- **위치:** Proxmox 호스트 `192.168.0.49` → LXC **135**(`tokisync-api`, Ubuntu 24.04, unprivileged+nesting). 코드 `/opt/tokisync/server/`, 정적 `/opt/tokisync/docs/`. config `server/config.json`(open 모드 + 텔레그램 `botToken`/`chatId`), 상태 `server/data/state.json`.
+- **유닛 파일:** 컨테이너 내부 `/etc/systemd/system/tokisync-control-api.service` (`Restart=on-failure`, onboot). zero-dep(Node 22, npm install 불필요).
+- **관리 명령:** (`ssh root@192.168.0.49` 후)
   ```bash
-  systemctl --user status tokisync-control-api      # 상태
-  systemctl --user restart tokisync-control-api     # 코드 변경/config.json 수정 후 재시작
-  systemctl --user stop tokisync-control-api         # 정지
-  journalctl --user -u tokisync-control-api -f       # 로그 팔로우
+  pct exec 135 -- systemctl status tokisync-control-api     # 상태
+  pct exec 135 -- systemctl restart tokisync-control-api    # 코드/config 변경 후 재시작
+  pct exec 135 -- journalctl -u tokisync-control-api -f      # 로그 팔로우
   ```
-- **주의:** 서비스가 8787을 상시 점유하므로 `node server/control-api.js`를 **수동으로 또 띄우지 말 것**(중복 바인드 EADDRINUSE). 디버깅 시엔 서비스 stop 후 수동 실행.
+- **코드/유저스크립트 갱신:** robocom에서 빌드 → `rsync`로 `/opt/tokisync/`에 배포(`server/`는 `config.json`·`data/` 제외). 절차: `documentation/PROXMOX_MIGRATION.md`.
 - **config.json 변경 반영:** 서비스는 기동 시 1회 로드 → 토큰/포트/telegram 바꾸면 `restart` 필요.
 
 ## 빌드 / 배포
 
 ```bash
-npm run build:core      # webpack → docs/tokiSync.user.js (유저스크립트 본체)
+# ⚠️ 새 컨트롤 API 주소(.135)를 배너 @updateURL/@downloadURL에 주입해서 빌드:
+TOKI_UPDATE_BASE_URL=http://192.168.0.135:8787 npm run build:core   # → docs/tokiSync.user.js
+# 배포: rsync docs/ → LXC 135 (documentation/PROXMOX_MIGRATION.md Phase C 참조)
 # (전체: npm run build = viewer + core + gas)
 ```
-- **버전 컨벤션:** `1.20.5-custom.YYMMDD-N` (예: `1.20.5-custom.260601-4`). 배너는 `webpack.core.config.cjs`의 `@version`에 하드코딩 → 빌드 전 수동 증가.
-- **현재 배포 버전:** `1.20.5-custom.260601-4`.
-- **✅ 자동 업데이트 지원(260601-1+):** 빌드 배너에 `@updateURL`/`@downloadURL`을 8765 URL로 추가함.
+- **버전 컨벤션:** `1.22.0-multi.YYMMDD-N` (예: `1.22.0-multi.260604-16`). 버전은 `package.json` `components.script` → 빌드 전 수동 증가.
+- **현재 배포 버전:** `1.22.0-multi.260604-16`.
+- **✅ 자동 업데이트:** 빌드 배너 `@updateURL`/`@downloadURL`은 `TOKI_UPDATE_BASE_URL`(.135:8787)로 주입됨(`build/lan-custom.cjs`).
   → Tampermonkey 대시보드 → **유틸리티 → "유저스크립트 업데이트 확인"** 으로 **전 프로필 자동 갱신**(수동 재설치 불필요).
   날짜 segment 증가(`260601` > `260531`)로 TM의 "더 새 버전" 감지가 안정적. (단, `@updateURL`이 없던 옛 설치본은 마지막으로 1회 수동 재설치 필요.)
 
@@ -65,8 +67,8 @@ npm run build:core      # webpack → docs/tokiSync.user.js (유저스크립트 
 config.json 추가키: `leaseTtlMs`(기본 120000), `leaseMax`(기본 4). 텔레그램: `telegram.scriptPath`(기존 telegram-noti.sh) 또는 `botToken`+`chatId`.
 
 ### 사용 절차
-1. **서버 기동**(robocom): `node server/control-api.js`. 토큰 쓰려면 `config.json`에 `token` 작성(open 모드면 생략).
-2. **대시보드**(폰/노트북, 같은 VPN망): `http://192.168.0.100:8787/` → ⚙️ 연결 설정에 토큰 입력(있으면).
+1. **서버**: Proxmox LXC 135에서 `tokisync-control-api`가 상시 가동(수동 기동 불필요). open 모드(토큰 없음).
+2. **대시보드**(폰/노트북, 같은 VPN망): `http://192.168.0.135:8787/` → open 모드라 ⚙️ 연결 설정 토큰 불필요(빈칸).
 3. **win-c 유저스크립트**(프로필마다): Tampermonkey → 🌐 원격 제어 설정 → URL/토큰 + **클라이언트 ID**(예: `A-direct`/`B-vpn`)·동시 보유 작업수(leaseMax). clientId 있으면 lease 모드.
    - ⚠️ **토큰은 대시보드·유저스크립트 각각 따로 저장**(공유 안 됨). open 모드면 어디에도 불필요.
 4. **작업 투입(둘 중 하나):**
