@@ -11,6 +11,7 @@
 
 import { getConfig } from './config.js';
 import { LogBox } from './ui.js';
+import { getRemoteConfigFromStore } from './lan-custom-config.js';
 
 /** base URL 정규화 — 뒤쪽 슬래시 제거 */
 function normalizeBase(url) {
@@ -33,28 +34,79 @@ function encodePath(segment) {
     return encodeURIComponent(segment);
 }
 
-function gmRequest(opts) {
+function displayPath(url) {
+    try {
+        const u = new URL(url);
+        return u.pathname;
+    } catch (e) {
+        return String(url || '').replace(/^https?:\/\/[^/]+/i, '');
+    }
+}
+
+function gmRequest(opts, hardTimeoutMs = opts.timeout || 30000) {
     return new Promise((resolve, reject) => {
-        GM_xmlhttpRequest({
+        let done = false;
+        let xhr = null;
+        const finish = (fn, value) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            fn(value);
+        };
+        const timer = setTimeout(() => {
+            try { if (xhr && typeof xhr.abort === 'function') xhr.abort(); } catch (e) {}
+            finish(reject, new Error(`[WebDAV] 하드 타임아웃(${Math.round(hardTimeoutMs / 1000)}초): ${opts.method} ${displayPath(opts.url)}`));
+        }, hardTimeoutMs);
+        xhr = GM_xmlhttpRequest({
             ...opts,
-            onload: (res) => resolve(res),
-            onerror: (err) => reject(new Error(`[WebDAV] 네트워크 오류: ${err?.error || 'unknown'}`)),
-            ontimeout: () => reject(new Error(`[WebDAV] 타임아웃: ${opts.url}`))
+            onload: (res) => finish(resolve, res),
+            onerror: (err) => finish(reject, new Error(`[WebDAV] 네트워크 오류: ${err?.error || 'unknown'} (${opts.method} ${displayPath(opts.url)})`)),
+            ontimeout: () => finish(reject, new Error(`[WebDAV] 타임아웃: ${opts.method} ${displayPath(opts.url)}`))
         });
     });
+}
+
+async function propfindCollection(url, config) {
+    return await gmRequest({
+        method: 'PROPFIND',
+        url,
+        headers: buildHeaders(config, { 'Depth': '0', 'Content-Type': 'application/xml' }),
+        data: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>',
+        timeout: 12000
+    }, 15000);
 }
 
 /**
  * WebDAV 컬렉션(폴더) 보장 — 없으면 MKCOL 생성.
  * 이미 존재(405/301/409 변형)하면 무시. 부모가 없으면 호출 순서로 보장.
  */
-async function ensureCollection(url, config) {
+async function ensureCollection(url, config, label, logger) {
+    if (logger && typeof logger.log === 'function') {
+        logger.log(`[WebDAV] 폴더 확인: ${label}`);
+    }
+    try {
+        const chk = await propfindCollection(url, config);
+        if (chk.status === 207 || (chk.status >= 200 && chk.status < 300) || chk.status === 301 || chk.status === 302) {
+            return;
+        }
+        if (chk.status === 401 || chk.status === 403) {
+            throw new Error(`[WebDAV] 폴더 확인 인증/권한 실패 (${chk.status}): ${label}`);
+        }
+        if (chk.status !== 404 && logger && typeof logger.warn === 'function') {
+            logger.warn(`[WebDAV] 폴더 확인 상태 ${chk.status}: ${label}`, 'WebDAV');
+        }
+    } catch (err) {
+        if (logger && typeof logger.warn === 'function') {
+            logger.warn(`[WebDAV] 폴더 확인 실패, MKCOL 시도: ${label} (${err.message})`, 'WebDAV');
+        }
+    }
+
     const res = await gmRequest({
         method: 'MKCOL',
         url,
         headers: buildHeaders(config),
         timeout: 30000
-    });
+    }, 35000);
     // 201 Created = 생성됨, 405 Method Not Allowed = 이미 존재(대부분 서버), 301 = 존재
     if (res.status === 201 || res.status === 405 || res.status === 301) return;
     // 일부 서버는 이미 존재 시 409를 주기도 하나, 보통 부모 부재. 그래도 진행 시도.
@@ -67,6 +119,78 @@ async function ensureCollection(url, config) {
     }
     // 그 외 상태는 경고만 — PUT 단계에서 최종 판정
     console.warn(`[WebDAV] MKCOL 예상치 못한 상태 ${res.status}: ${url}`);
+}
+
+/** Uint8Array → base64 (콜스택 안전, 청크 단위 변환) */
+function bytesToBase64(bytes) {
+    let bin = '';
+    const STEP = 0x8000;
+    for (let i = 0; i < bytes.length; i += STEP) {
+        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + STEP));
+    }
+    return btoa(bin);
+}
+
+/**
+ * 대용량 파일을 robocom 컨트롤 API로 청크 전송하고, 서버가 LAN으로 NAS에 PUT한다.
+ * 브라우저 GM_xmlhttpRequest가 대용량 요청-본문을 못 보내는 한계(원격/Tampermonkey)를 우회.
+ * 청크 512KB(base64 ~683KB, 서버 readJsonBody 1MB 한도 내) + 동시 4병렬 전송으로 속도 향상.
+ * 메타는 첫 청크(seq 0)에 동봉해 선전송→서버 세션 확정 후 나머지를 병렬 전송(서버는 순서 무관 조립).
+ */
+async function uploadViaRelay(blob, category, folderName, fileName, remote, config, logger) {
+    const buf = new Uint8Array(await blob.arrayBuffer());
+    const CHUNK = 512 * 1024;
+    const PARALLEL = 4;
+    const total = Math.max(1, Math.ceil(buf.length / CHUNK));
+    const uploadId = `up_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    const base = (remote.url || '').replace(/\/+$/, '');
+    const meta = {
+        webdavUrl: config.webdavUrl,
+        user: config.webdavUser,
+        pass: config.webdavPass,
+        category: (category || 'Webtoon').toString(),
+        folder: (folderName || 'TokiSync').toString(),
+        fileName: fileName,
+        contentType: blob.type || 'application/octet-stream',
+        totalSize: buf.length,
+    };
+
+    const sendChunk = async (seq, withMeta) => {
+        const slice = buf.subarray(seq * CHUNK, Math.min(buf.length, (seq + 1) * CHUNK));
+        const payload = { uploadId, seq, total, chunkB64: bytesToBase64(slice) };
+        if (withMeta) payload.meta = meta;
+        const headers = { 'Content-Type': 'application/json' };
+        if (remote.token) headers['Authorization'] = `Bearer ${remote.token}`;
+        const res = await gmRequest({
+            method: 'POST',
+            url: `${base}/nas/upload`,
+            headers,
+            data: JSON.stringify(payload),
+            timeout: 45000
+        }, 50000);
+        if (res.status < 200 || res.status >= 300) {
+            let detail = '';
+            try { detail = JSON.parse(res.responseText || '{}').error || ''; } catch (e) {}
+            throw new Error(`[WebDAV] 릴레이 청크 ${seq + 1}/${total} 실패 (${res.status}) ${detail}`);
+        }
+        try { return JSON.parse(res.responseText || '{}'); } catch (e) { return {}; }
+    };
+
+    logger.log(`[WebDAV] 릴레이 업로드 중... (${meta.category}/${meta.folder}/${fileName}, ${(buf.length / 1024 / 1024).toFixed(1)}MB, ${total}청크 ·${PARALLEL}병렬)`);
+
+    // 1) 첫 청크(메타 포함) 선전송 → 서버 세션/메타 확정
+    let r0 = await sendChunk(0, true);
+    if (r0 && r0.done) { logger.success(`[WebDAV] ✅ 업로드 완료(릴레이): ${fileName}`); return true; }
+
+    // 2) 나머지 청크를 PARALLEL개씩 병렬 전송 (서버는 seq로 순서 무관 조립)
+    for (let start = 1; start < total; start += PARALLEL) {
+        const batch = [];
+        for (let seq = start; seq < Math.min(total, start + PARALLEL); seq++) batch.push(sendChunk(seq, false));
+        const results = await Promise.all(batch);
+        if (results.some((r) => r && r.done)) break;
+    }
+    logger.success(`[WebDAV] ✅ 업로드 완료(릴레이): ${fileName}`);
+    return true;
 }
 
 /**
@@ -91,24 +215,55 @@ export async function uploadWebDav(blob, category, folderName, fileName) {
     const safeSeries = series.replace(/[\\/<>:"|?*]/g, '_');
     const safeFile = fileName.replace(/[\\/<>:"|?*]/g, '_');
 
+    // 원격(멀티-IP) 워커는 브라우저에서 NAS로 직접 대용량 PUT이 막히므로(GM_xhr 본문 한계),
+    // robocom 컨트롤 API로 청크 전송 → 서버가 LAN으로 NAS 저장(릴레이). 원격 URL 미설정 시 직접 PUT.
+    const remote = getRemoteConfigFromStore(typeof GM_getValue !== 'undefined' ? GM_getValue : null);
+    if (remote && remote.url) {
+        return await uploadViaRelay(blob, cat, safeSeries, safeFile, remote, config, logger);
+    }
+
     const catUrl = `${base}/${encodePath(cat)}`;
     const seriesUrl = `${catUrl}/${encodePath(safeSeries)}`;
     const fileUrl = `${seriesUrl}/${encodePath(safeFile)}`;
 
     // 1. 폴더 보장 (상위 → 하위 순서)
-    await ensureCollection(catUrl, config);
-    await ensureCollection(seriesUrl, config);
+    await ensureCollection(catUrl, config, cat, logger);
+    await ensureCollection(seriesUrl, config, `${cat}/${safeSeries}`, logger);
 
     // 2. PUT 업로드
+    //   대용량 Blob을 GM_xmlhttpRequest로 그대로 보내면 일부 Tampermonkey/Chrome 조합에서
+    //   page→background 마샬링이 멈추는 사례가 있어 ArrayBuffer로 변환해 전송한다.
+    //   (브라우저 밖 curl PUT은 정상이므로 OS/NAS가 아닌 GM 전송 계층을 회피 + 짧은 타임아웃으로 좀비 방지)
     logger.log(`[WebDAV] 업로드 중... (${cat}/${safeSeries}/${safeFile}, ${(blob.size / 1024 / 1024).toFixed(1)}MB)`);
-    const res = await gmRequest({
-        method: 'PUT',
-        url: fileUrl,
-        headers: buildHeaders(config, { 'Content-Type': blob.type || 'application/octet-stream' }),
-        data: blob,
-        binary: true,
-        timeout: 600000
-    });
+    const body = await blob.arrayBuffer();
+    let res;
+    try {
+        res = await gmRequest({
+            method: 'PUT',
+            url: fileUrl,
+            headers: buildHeaders(config, { 'Content-Type': blob.type || 'application/octet-stream' }),
+            data: body,
+            timeout: 30000
+        }, 35000);
+    } catch (err) {
+        // 전송이 멈추거나 응답을 못 받아도 본문이 NAS에 실제로 올라간 경우가 있어, PROPFIND로 적재(크기 일치)를 검증한다.
+        logger.warn(`[WebDAV] PUT 응답 이상(${err.message}) → 실제 적재 검증 시도`, 'WebDAV');
+        try {
+            const chk = await gmRequest({
+                method: 'PROPFIND',
+                url: fileUrl,
+                headers: buildHeaders(config, { 'Depth': '0', 'Content-Type': 'application/xml' }),
+                data: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:getcontentlength/></d:prop></d:propfind>',
+                timeout: 15000
+            }, 18000);
+            const m = /getcontentlength>(\d+)</i.exec(chk.responseText || '');
+            if (m && Number(m[1]) === blob.size) {
+                logger.success(`[WebDAV] ✅ 업로드 확인됨(검증, ${(blob.size / 1024 / 1024).toFixed(1)}MB): ${safeFile}`);
+                return true;
+            }
+        } catch (e2) {}
+        throw err;
+    }
 
     if (res.status >= 200 && res.status < 300) {
         logger.success(`[WebDAV] ✅ 업로드 완료: ${safeFile}`);

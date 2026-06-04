@@ -106,6 +106,22 @@ export function normalizeEpisodeNumber(n) {
     return m[2] ? `${Number(m[1])}.${Number(m[2])}` : String(Number(m[1]));
 }
 
+export async function listNasCategories(opts) {
+    const baseUrl = normalizeBase(opts.webdavUrl);
+    if (!/^https?:\/\//i.test(baseUrl)) throw new Error('valid webdavUrl required');
+    const res = await propfind(baseUrl, opts);
+    if (res.status === 401 || res.status === 403) throw new Error(`WebDAV auth failed (${res.status})`);
+    if (res.status !== 207 && !(res.status >= 200 && res.status < 300)) {
+        throw new Error(`WebDAV PROPFIND failed (${res.status})`);
+    }
+    const baseName = basenameFromHref(new URL(baseUrl).pathname);
+    const categories = parseMultiStatus(res.text)
+        .filter((e) => e.isCollection && e.name !== baseName)
+        .map((e) => e.name)
+        .sort((a, b) => a.localeCompare(b, 'ko'));
+    return { folderUrl: baseUrl, categories };
+}
+
 export async function listNasSeries(opts) {
     const baseUrl = normalizeBase(opts.webdavUrl);
     const category = String(opts.category || 'Webtoon').trim() || 'Webtoon';
@@ -160,4 +176,53 @@ export async function scanNasSeries(opts) {
         reason: f.size >= thresholdBytes ? 'ok' : 'too-small',
     }));
     return { folderUrl, category, series, thresholdBytes, files };
+}
+
+function basicAuth(user, pass) {
+    return user ? `Basic ${Buffer.from(`${user}:${pass || ''}`, 'utf8').toString('base64')}` : '';
+}
+
+async function webdavMkcol(url, opts) {
+    const headers = {};
+    const a = basicAuth(opts.user, opts.pass);
+    if (a) headers.Authorization = a;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
+    try {
+        const res = await fetch(url, { method: 'MKCOL', headers, signal: controller.signal });
+        return res.status; // 201 created / 405·409 = already exists(무시)
+    } catch (e) {
+        return 0;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+/**
+ * 조립된 파일 버퍼를 NAS WebDAV로 직접 PUT한다(서버=robocom가 LAN 직결로 저장).
+ * 브라우저 GM_xmlhttpRequest의 대용량 요청-본문 한계를 우회하는 청크 릴레이의 종착점.
+ */
+export async function putNasFile(opts, category, folder, fileName, buffer, contentType) {
+    const baseUrl = normalizeBase(opts.webdavUrl);
+    if (!/^https?:\/\//i.test(baseUrl)) throw new Error('valid webdavUrl required');
+    const cat = String(category || 'Webtoon').trim() || 'Webtoon';
+    const safeFolder = safeSeriesName(folder) || 'TokiSync';
+    const safeName = String(fileName || '').replace(/[\\/<>:"|?*]/g, '_').trim() || 'file.bin';
+    // 폴더 보장 (상위 → 하위, 존재 시 405/409 무시)
+    await webdavMkcol(webdavUrl(baseUrl, [cat]), opts);
+    await webdavMkcol(webdavUrl(baseUrl, [cat, safeFolder]), opts);
+    const fileUrl = webdavUrl(baseUrl, [cat, safeFolder, safeName]);
+    const headers = { 'Content-Type': contentType || 'application/octet-stream' };
+    const a = basicAuth(opts.user, opts.pass);
+    if (a) headers.Authorization = a;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 120000);
+    try {
+        const res = await fetch(fileUrl, { method: 'PUT', headers, body: buffer, signal: controller.signal });
+        if (res.status >= 200 && res.status < 300) return { status: res.status, url: fileUrl, size: buffer.length };
+        if (res.status === 401 || res.status === 403) throw new Error(`WebDAV 인증 실패 (${res.status})`);
+        throw new Error(`WebDAV PUT 실패 (${res.status})`);
+    } finally {
+        clearTimeout(timer);
+    }
 }
