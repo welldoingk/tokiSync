@@ -347,6 +347,64 @@ export class Store {
         return summary;
     }
 
+    _logDedupeKey(clientSeq, time, type, msg) {
+        return `${clientSeq}\n${time}\n${type}\n${msg}`;
+    }
+
+    _appendLogEntries(prev, inputLogs) {
+        const logs = (prev && Array.isArray(prev.logs)) ? prev.logs.slice() : [];
+        let logSeq = Number(prev && prev.logSeq) || (logs.length ? Number(logs[logs.length - 1].seq) || 0 : 0);
+        const seen = new Set(logs.slice(-MAX_CLIENT_LOGS).map((l) =>
+            this._logDedupeKey(l.clientSeq ?? l.seq ?? 0, l.time || '', l.type || 'normal', l.msg || '')
+        ));
+        const appended = [];
+        for (const l of Array.isArray(inputLogs) ? inputLogs : []) {
+            if (!l || typeof l.msg !== 'string') continue;
+            const msg = l.msg.slice(0, 500);
+            if (!msg) continue;
+            const clientSeqRaw = Number(l.seq);
+            const clientSeq = Number.isFinite(clientSeqRaw) ? clientSeqRaw : 0;
+            const time = String(l.time || '');
+            const type = String(l.type || 'normal');
+            const key = this._logDedupeKey(clientSeq, time, type, msg);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const entry = {
+                seq: ++logSeq,       // 서버 측 단조 증가 seq: 클라 새로고침으로 client seq가 리셋돼도 증분 조회 유지
+                clientSeq,
+                time,
+                type,
+                msg,
+            };
+            logs.push(entry);
+            appended.push(entry);
+        }
+        while (logs.length > MAX_CLIENT_LOGS) logs.shift();
+        return { logs, logSeq, appended };
+    }
+
+    /**
+     * WebSocket 로그 증분 append(휘발성).
+     * 진행률 heartbeat와 별개로 들어오므로 기존 queue/running/progress 필드는 보존한다.
+     */
+    appendClientLogs(clientId, inputLogs, now, meta = {}) {
+        const prev = this.state.reports[clientId] || {};
+        const { logs, logSeq, appended } = this._appendLogEntries(prev, inputLogs);
+        this.state.reports[clientId] = {
+            label: meta.label || prev.label || clientId,
+            ip: meta.ip || prev.ip || '',
+            queue: Array.isArray(prev.queue) ? prev.queue : [],
+            running: !!prev.running,
+            progress: prev.progress ?? null,
+            current: Array.isArray(prev.current) ? prev.current : [],
+            logs,
+            logSeq,
+            version: typeof meta.version === 'string' ? meta.version.slice(0, 60) : (prev.version || ''),
+            ts: now,
+        };
+        return { logs: appended, lastSeq: logSeq };
+    }
+
     /**
      * 클라이언트별 진행/생존 리포트(휘발성) + 보유 lease 갱신(heartbeat).
      * lease 갱신은 expiresAt만 미루는 것이므로 디스크에 쓰지 않는다(재시작 시 만료→재투입은 안전한 실패).
@@ -356,21 +414,7 @@ export class Store {
         const prev = this.state.reports[clientId];
         const hasCurrent = Array.isArray(report.current);
         const currentLeaseIds = hasCurrent ? new Set(report.current.map((id) => String(id))) : null;
-        // 로그 ring 보존 + 증분 append(클라가 heartbeat 마다 마지막 전송 이후의 새 로그만 동봉).
-        const logs = (prev && Array.isArray(prev.logs)) ? prev.logs : [];
-        if (Array.isArray(report.logs) && report.logs.length) {
-            for (const l of report.logs) {
-                if (l && typeof l.msg === 'string') {
-                    logs.push({
-                        seq: Number(l.seq) || 0,
-                        time: String(l.time || ''),
-                        type: String(l.type || 'normal'),
-                        msg: l.msg.slice(0, 500),
-                    });
-                }
-            }
-            while (logs.length > MAX_CLIENT_LOGS) logs.shift();
-        }
+        const logResult = this._appendLogEntries(prev, report.logs);
         this.state.reports[clientId] = {
             label: report.label || clientId,
             ip: report.ip || '',
@@ -378,7 +422,8 @@ export class Store {
             running: !!report.running,
             progress: report.progress ?? null,
             current: Array.isArray(report.current) ? report.current : [],
-            logs,
+            logs: logResult.logs,
+            logSeq: logResult.logSeq,
             version: typeof report.version === 'string' ? report.version.slice(0, 60) : '',
             ts: now,
         };
@@ -388,6 +433,7 @@ export class Store {
             if (hasCurrent && !currentLeaseIds.has(u.id)) continue;
             u.expiresAt = now + ttl;
         }
+        return { logs: logResult.appended, lastSeq: logResult.logSeq };
     }
 
     clientLeaseIds(clientId, now) {
@@ -455,8 +501,12 @@ export class Store {
     clients(now, onlineWindowMs) {
         this._expire(now);
         const pool = { pending: 0, leased: 0, done: 0, failed: 0, total: this.state.units.length };
+        // done unit은 완료 보고 시 clientId를 비우지 않으므로(실패만 비움) 클라별 완료 수를 집계할 수 있다.
+        // 풀 비우기/재투입 시 units가 갱신되면 자연히 리셋된다(별도 영속 카운터 불필요).
+        const doneByClient = {};
         for (const u of this.state.units) {
             if (pool[u.status] !== undefined) pool[u.status]++;
+            if (u.status === 'done' && u.clientId) doneByClient[u.clientId] = (doneByClient[u.clientId] || 0) + 1;
         }
         const clients = Object.entries(this.state.reports).map(([id, r]) => {
             const leasedUnits = this.state.units.filter((u) => u.status === 'leased' && u.clientId === id);
@@ -501,6 +551,7 @@ export class Store {
                 current,
                 currentItems,
                 leased: leasedUnits.length,
+                done: doneByClient[id] || 0,
                 version: r.version || '',
                 ts: r.ts,
             };

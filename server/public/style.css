@@ -213,6 +213,8 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
     color: var(--muted);
 }
 .client-card .tag.run { color: var(--accent); border-color: var(--accent); }
+/* 완료 건수 배지: margin-left:auto(.tag)로 우측 클러스터, run 태그 앞에 위치 */
+.client-card .tag.done-count { color: #3fb950; border-color: rgba(63, 185, 80, 0.45); font-variant-numeric: tabular-nums; }
 #toast.show { opacity: 0.95; }
 
 /* ── 라이트 테마 (body.light 오버라이드) ── */
@@ -263,7 +265,7 @@ body.light .icon-btn.active { color: #fff; }
 
 /* 클라이언트 현재 회차 */
 .client-card .cc-current {
-    margin-top: 4px;
+    margin-top: 6px;
     font-size: 12px;
     color: var(--text);
     overflow: hidden;
@@ -271,6 +273,38 @@ body.light .icon-btn.active { color: #fff; }
     white-space: nowrap;
 }
 .client-card .cc-current .ico { opacity: .8; margin-right: 4px; }
+.client-card .cc-current a {
+    color: var(--text);
+    text-decoration: none;
+}
+.client-card .cc-current a:hover { color: var(--accent-2); }
+.client-card .cc-detail-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 5px;
+}
+.client-card .cc-detail-meta span {
+    display: inline-flex;
+    align-items: center;
+    min-height: 20px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+.client-card .cc-error {
+    margin-top: 5px;
+    color: var(--danger);
+    font-size: 11px;
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 .client-card .cc-stage {
     margin-top: 4px;
     font-size: 12px;
@@ -282,6 +316,107 @@ body.light .icon-btn.active { color: #fff; }
 }
 .client-card .cc-stage-label { color: var(--muted); font-weight: 600; }
 .client-card .cc-stage-pct { color: var(--accent); font-variant-numeric: tabular-nums; }
+.client-card .cc-progress {
+    margin-top: 8px;
+}
+.client-card .cc-progress-top {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+}
+.client-card .cc-progress-label {
+    color: var(--muted);
+    font-weight: 700;
+}
+.client-card .cc-progress-top strong {
+    color: var(--accent-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.client-card .cc-progress-pct {
+    color: var(--accent);
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+}
+.client-card .cc-progress-bar {
+    position: relative;
+    height: 8px;
+    margin-top: 6px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: var(--panel);
+    border: 1px solid var(--border);
+}
+.client-card .cc-progress-bar span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, var(--accent-2), var(--accent));
+    transition: width .2s ease;
+}
+.client-card .cc-progress.is-error .cc-progress-bar span {
+    background: var(--danger);
+}
+.client-card .cc-progress.is-done .cc-progress-bar span {
+    background: var(--accent);
+}
+.client-card .cc-steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 7px;
+}
+.client-card .cc-step {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 22px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 10.5px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.client-card .cc-step-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--muted);
+    opacity: .65;
+}
+.client-card .cc-step.done {
+    color: var(--accent);
+    border-color: rgba(52, 211, 153, .35);
+}
+.client-card .cc-step.done .cc-step-dot {
+    background: var(--accent);
+    opacity: 1;
+}
+.client-card .cc-step.active {
+    color: var(--accent-2);
+    border-color: rgba(96, 165, 250, .55);
+    background: rgba(96, 165, 250, .12);
+}
+.client-card .cc-step.active .cc-step-dot {
+    background: var(--accent-2);
+    box-shadow: 0 0 6px var(--accent-2);
+    opacity: 1;
+}
+.client-card .cc-progress.is-error .cc-step.active {
+    color: var(--danger);
+    border-color: rgba(248, 113, 113, .55);
+    background: rgba(248, 113, 113, .12);
+}
+.client-card .cc-progress.is-error .cc-step.active .cc-step-dot {
+    background: var(--danger);
+    box-shadow: 0 0 6px var(--danger);
+}
 .client-card .cc-risk {
     display: inline-flex;
     max-width: 100%;
@@ -394,7 +529,28 @@ body.light .log-stream { background: #14161b; }
     padding: 8px 10px;
     font-size: 13px;
 }
+.nas-inline-button {
+    margin-top: 6px;
+}
 .nas-result { margin-top: 10px; }
+.nas-criteria,
+.nas-update-card {
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    border-radius: 9px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+    color: var(--muted);
+    font-size: 12px;
+}
+.nas-criteria strong,
+.nas-update-card strong {
+    color: var(--text);
+}
+.nas-update-card span {
+    color: var(--text);
+    word-break: break-all;
+}
 .nas-summary {
     display: flex;
     flex-wrap: wrap;

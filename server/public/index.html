@@ -112,6 +112,12 @@
                     <div>
                         <label>카테고리 폴더</label>
                         <input type="text" id="nas-category" value="Webtoon" placeholder="Webtoon / Manga / Novel" />
+                        <select id="nas-category-list" class="nas-select" title="NAS 카테고리 폴더 선택">
+                            <option value="">카테고리 선택</option>
+                            <option value="Webtoon">Webtoon</option>
+                            <option value="Manga">Manga</option>
+                            <option value="Novel">Novel</option>
+                        </select>
                     </div>
                     <div>
                         <label>손상 의심 기준</label>
@@ -126,15 +132,17 @@
                 <div>
                     <label>업데이트용 작품 메인 URL</label>
                     <input type="text" id="nas-update-url" placeholder="새 회차 확인용 작품 메인 URL" />
+                    <button id="btn-nas-build-url" class="small nas-inline-button">폴더 ID로 메인 URL 만들기</button>
                 </div>
             </div>
             <div class="row">
-                <button id="btn-nas-series" class="small">폴더 목록</button>
+                <button id="btn-nas-categories" class="small">카테고리 목록</button>
+                <button id="btn-nas-series" class="small">작품 폴더 목록</button>
                 <button id="btn-nas-scan" class="primary">NAS 스캔</button>
                 <button id="btn-nas-requeue" class="small">누락/손상 재다운로드</button>
                 <button id="btn-nas-update" class="blue">업데이트 확인</button>
             </div>
-            <div class="muted" style="margin-top:6px">비밀번호는 서버 설정에 저장하지 않고, 이 대시보드 요청에만 사용합니다. 업데이트 확인은 기존 자동 펼침으로 새 회차를 작업 풀에 추가합니다.</div>
+            <div class="muted" style="margin-top:6px">비밀번호는 서버 설정에 저장하지 않고, 이 대시보드 요청에만 사용합니다. 업데이트용 작품 메인 URL은 회차 URL이 아니라 작품 목록/메인 페이지 URL입니다.</div>
             <div id="nas-result" class="nas-result"><div class="empty">NAS 폴더를 선택하고 스캔하세요.</div></div>
         </div>
 

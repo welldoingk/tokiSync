@@ -42,7 +42,14 @@
     let _audioCtx = null;        // 알림 비프용 (lazy)
     let _logSel = '';            // 실시간 로그 패널에서 선택된 clientId
     let _logSince = 0;           // 선택 클라의 마지막 수신 로그 seq(증분 커서)
+    let _logWs = null;           // 로그 WebSocket(선택 클라 1개 구독)
+    let _logWsReconnect = null;
+    let _logWsNextAt = 0;
+    let _logWsSubscribed = '';
     let _nasAudit = null;        // 최근 NAS 스캔 결과
+    let _clientsCache = [];
+    let _poolCache = null;
+    let _liveTickTimer = null;
 
     function getBase() {
         const b = (localStorage.getItem(LS.base) || '').trim().replace(/\/+$/, '');
@@ -53,6 +60,10 @@
     }
     function getPollSec() {
         return Math.max(2, parseInt(localStorage.getItem(LS.poll) || '3', 10) || 3);
+    }
+
+    function scriptUpdateUrl() {
+        return `${getBase() || location.origin}/tokiSync.user.js`;
     }
 
     function api(path, opts = {}) {
@@ -121,12 +132,132 @@
         return status === 'processing' ? '실행 중' : '';
     }
 
+    const PROGRESS_STEPS = [
+        { k: 'load', label: '페이지 로딩' },
+        { k: 'scroll', label: '스크롤 스캔' },
+        { k: 'download', label: '다운로드' },
+        { k: 'parse', label: '미디어 파싱' },
+        { k: 'save', label: 'NAS 저장' },
+        { k: 'done', label: '완료' },
+    ];
+
+    function clampPercent(v) {
+        const n = Number(v);
+        if (!Number.isFinite(n)) return 0;
+        return Math.max(0, Math.min(100, Math.round(n)));
+    }
+
+    function clip(s, max = 70) {
+        const text = String(s == null ? '' : s);
+        return text.length > max ? text.slice(0, max - 1) + '…' : text;
+    }
+
+    function fmtShortDuration(ms) {
+        const n = Number(ms);
+        if (!Number.isFinite(n) || n < 0) return '';
+        const sec = Math.floor(n / 1000);
+        if (sec < 60) return sec + '초';
+        const min = Math.floor(sec / 60);
+        if (min < 60) return min + '분 ' + String(sec % 60).padStart(2, '0') + '초';
+        const h = Math.floor(min / 60);
+        return h + '시간 ' + String(min % 60).padStart(2, '0') + '분';
+    }
+
+    function stageIndex(stage, status, percent) {
+        if (status === 'completed' || stage === 'STAGE_COMPLETED') return 5;
+        if (status === 'failed' || stage === 'STAGE_FAILED') return Math.max(0, Math.min(4, stageIndex('', 'processing', percent)));
+        const map = {
+            STAGE_INIT: 0,
+            STAGE_DOM_READY: 0,
+            STAGE_SCROLLING: 1,
+            STAGE_DOWNLOADING: 2,
+            STAGE_PARSING: 3,
+            STAGE_UPLOADING: 4,
+        };
+        if (map[stage] != null) return map[stage];
+        const pct = Number(percent);
+        if (!Number.isFinite(pct)) return status === 'pending' ? -1 : 0;
+        if (pct >= 100) return 5;
+        if (pct >= 90) return 4;
+        if (pct >= 70) return 3;
+        if (pct >= 45) return 2;
+        if (pct >= 35) return 1;
+        return status === 'pending' ? -1 : 0;
+    }
+
+    function progressFillPercent(item, pct, idx) {
+        if (!item) return 0;
+        const status = String(item.status || '');
+        if (status === 'completed') return 100;
+        if (status === 'failed') return clampPercent(pct);
+        if (Number.isFinite(Number(pct)) && Number(pct) > 0) return clampPercent(pct);
+        if (idx < 0) return 0;
+        return clampPercent(((idx + 0.35) / PROGRESS_STEPS.length) * 100);
+    }
+
+    function clientProgressHtml(client, activeItem) {
+        if (!client || !client.online || !activeItem) return '';
+        const status = String(activeItem.status || '');
+        const pct = activeItem && Number.isFinite(Number(activeItem.progressPercent)) ? clampPercent(activeItem.progressPercent) : 0;
+        const idx = stageIndex(activeItem.stage, status, pct);
+        const fill = progressFillPercent(activeItem, pct, idx);
+        const label = stageLabel(activeItem.stage, status, pct) || (status === 'pending' ? '대기' : '실행 중');
+        const stateCls = status === 'failed' ? ' is-error' : (status === 'completed' ? ' is-done' : '');
+        const steps = PROGRESS_STEPS.map((s, i) => {
+            const cls = i < idx ? 'done' : (i === idx ? 'active' : '');
+            return `<span class="cc-step ${cls}" title="${esc(s.label)}"><span class="cc-step-dot"></span><span>${esc(s.label)}</span></span>`;
+        }).join('');
+        return `<div class="cc-progress${stateCls}">
+            <div class="cc-progress-top">
+                <span class="cc-progress-label">수집 진행</span>
+                <strong>${esc(label)}</strong>
+                <span class="cc-progress-pct">${pct}%</span>
+            </div>
+            <div class="cc-progress-bar" title="${esc(label)} ${pct}%"><span style="width:${fill}%"></span></div>
+            <div class="cc-steps">${steps}</div>
+        </div>`;
+    }
+
+    function clientDetailHtml(activeItem, fallbackUnit) {
+        const src = activeItem || fallbackUnit;
+        if (!src) return '';
+        const startedAt = Number(activeItem && activeItem.startedAt || 0);
+        const lastProgressAt = Number(activeItem && activeItem.lastProgressAt || 0);
+        const elapsed = startedAt ? fmtShortDuration(Date.now() - startedAt) : '';
+        const stalled = activeItem ? fmtShortDuration(itemStalledMs(activeItem)) : '';
+        const retryCount = Number(activeItem && activeItem.retryCount || 0);
+        const errorMsg = activeItem && activeItem.errorMsg ? clip(activeItem.errorMsg, 90) : '';
+        const url = src.url || src.episodeUrl || '';
+        const label = [
+            src.episodeNum || src.num || '',
+            src.episodeTitle || src.label || '',
+        ].filter(Boolean).join(' ') || shortUrl(url);
+        const parts = [
+            elapsed ? `<span>경과 ${esc(elapsed)}</span>` : '',
+            lastProgressAt ? `<span>갱신 ${fmtTime(lastProgressAt)}</span>` : '',
+            stalled ? `<span>정체 ${esc(stalled)}</span>` : '',
+            retryCount ? `<span>재시도 ${retryCount}</span>` : '',
+        ].filter(Boolean).join('');
+        return `<div class="cc-detail">
+            <div class="cc-current">
+                <span class="ico">▶️</span>
+                ${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(label)}</a>` : `<span>${esc(label)}</span>`}
+            </div>
+            ${parts ? `<div class="cc-detail-meta">${parts}</div>` : ''}
+            ${errorMsg ? `<div class="cc-error">${esc(errorMsg)}</div>` : ''}
+        </div>`;
+    }
+
     function riskBadgeHtml(client, activeItem) {
         if (!client || !client.online) return '';
         if (activeItem) {
             const status = String(activeItem.status || '');
             const retryCount = Number(activeItem.retryCount || 0);
-            const stalledForMs = Number(activeItem.stalledForMs || 0);
+            const stalledForMs = itemStalledMs(activeItem);
+            const errorMsg = String(activeItem.errorMsg || '').trim();
+            if (errorMsg) {
+                return `<div class="cc-risk">${esc(clip(errorMsg, 70))}</div>`;
+            }
             if (status === 'processing' && stalledForMs >= 90000) {
                 const sec = Math.round(stalledForMs / 1000);
                 const stage = stageLabel(activeItem.stage, status, activeItem.progressPercent);
@@ -146,6 +277,18 @@
             return '<div class="cc-risk">보유 lease · 작업 없음</div>';
         }
         return '';
+    }
+
+    function itemStalledMs(item) {
+        if (!item) return 0;
+        const base = Math.max(0, Number(item.stalledForMs || 0));
+        const snapshotAt = Number(item._snapshotAt || 0);
+        if (base > 0 && snapshotAt > 0) return base + Math.max(0, Date.now() - snapshotAt);
+        const lastProgressAt = Number(item.lastProgressAt || 0);
+        if (String(item.status || '') === 'processing' && lastProgressAt > 0) {
+            return Math.max(0, Date.now() - lastProgressAt);
+        }
+        return base;
     }
 
     function shortUrl(u) {
@@ -430,39 +573,88 @@
                 if (!cur && mine.length) cur = mine[0];
                 const currentItems = Array.isArray(c.currentItems) ? c.currentItems : [];
                 const activeItem = currentItems.find((i) => i.status === 'processing') || currentItems[0] || null;
-                const curLabel = activeItem
-                    ? (((activeItem.episodeNum || activeItem.num) ? (activeItem.episodeNum || activeItem.num) + ' ' : '') + (activeItem.episodeTitle || activeItem.label || shortUrl(activeItem.url)))
-                    : (cur ? ((cur.num ? cur.num + ' ' : '') + (cur.label || shortUrl(cur.url))) : '');
-                const pct = activeItem && Number.isFinite(Number(activeItem.progressPercent)) ? Math.round(Number(activeItem.progressPercent)) : null;
-                const stage = activeItem ? stageLabel(activeItem.stage, activeItem.status, pct) : '';
-                const stageHtml = (c.online && stage)
-                    ? `<div class="cc-stage"><span class="cc-stage-label">[수집 진행]</span> ${esc(stage)}${pct !== null ? ` <span class="cc-stage-pct">${pct}%</span>` : ''}</div>`
-                    : '';
+                const progressHtml = clientProgressHtml(c, activeItem);
+                const detailHtml = c.online ? clientDetailHtml(activeItem, cur) : '';
                 const riskHtml = riskBadgeHtml(c, activeItem);
-                const curHtml = (c.online && curLabel)
-                    ? `<div class="cc-current"><span class="ico">▶️</span>${esc(curLabel)}</div>` : '';
                 // 버전: 버전을 보내면 실제 버전을 표기(구버전이면 빨강, 최신이면 초록).
                 //   버전 미전송(=260601-11 미만, 버전 동봉 코드 없음)은 실제 버전을 알 수 없어 "구버전?" 표기.
                 const verShort = c.version ? (String(c.version).split('custom.').pop() || c.version) : '';
                 const verHtml = verShort
                     ? `<span class="ver${_isOldVer(c.version) ? ' old' : ''}">v${esc(verShort)}</span>`
                     : `<span class="ver old">구버전?</span>`;
+                const reportAge = c.online && c.ts
+                    ? `보고 ${esc(fmtShortDuration(Math.max(0, Date.now() - Number(c.ts))) || '방금')} 전`
+                    : '오프라인';
                 return `<div class="client-card">
                     <div class="cc-head">
                         <span class="dot ${dot}"></span>
                         <strong>${esc(c.label || c.clientId)}</strong>
                         ${c.ip ? `<span class="muted">${esc(c.ip)}</span>` : ''}
+                        <span class="tag done-count" title="이 클라이언트가 완료한 회차 수">✅ ${c.done || 0}건</span>
                         ${run}
                     </div>
-                    ${curHtml}
-                    ${stageHtml}
+                    ${detailHtml}
+                    ${progressHtml}
                     ${riskHtml}
                     <div class="cc-meta muted">
-                        보유 ${c.leased || 0}건${phase ? ` · ${esc(phase)}` : ''} · ${c.online ? fmtTime(c.ts) : '오프라인'} ${verHtml}
+                        보유 ${c.leased || 0}건${phase ? ` · ${esc(phase)}` : ''} · ${reportAge} ${verHtml}
                     </div>
                 </div>`;
             })
             .join('');
+    }
+
+    function normalizeClientsSnapshot(data) {
+        const snapshotAt = Date.now();
+        return (data && Array.isArray(data.clients) ? data.clients : []).map((c) => ({
+            ...c,
+            currentItems: Array.isArray(c.currentItems)
+                ? c.currentItems.map((i) => ({ ...i, _snapshotAt: snapshotAt }))
+                : [],
+        }));
+    }
+
+    function applyClientsSnapshot(data, options = {}) {
+        if (!data || !data.ok) return { anyOnline: false, anyRunning: false };
+        if (data.latestClientVersion) _latestVer = data.latestClientVersion;
+        const clients = normalizeClientsSnapshot(data);
+        _clientsCache = clients;
+        _poolCache = data.pool || _poolCache;
+        if (Array.isArray(data.leasedUnits)) {
+            _leasedMap = {};
+            data.leasedUnits.forEach((u) => {
+                if (!u.clientId) return;
+                (_leasedMap[u.clientId] = _leasedMap[u.clientId] || []).push(u);
+            });
+        }
+        if (_poolCache) {
+            renderPool(_poolCache);
+            updateEtaAndAlerts(_poolCache);
+        }
+        renderClients(_clientsCache);
+        updateLogClientOptions(_clientsCache);
+        _paused = !!data.paused;
+        const btn = $('btn-pause');
+        if (btn) { btn.textContent = _paused ? '▶️ 재개' : '⏸️ 전체 정지'; btn.className = _paused ? 'primary' : 'blue'; }
+        const badge = $('pause-badge');
+        if (badge) badge.textContent = _paused ? '⏸️ 정지됨' : '';
+        if (!options.skipSocket) {
+            connectLogWs();
+            subscribeLogWs();
+        }
+        const summary = {
+            anyOnline: _clientsCache.some((c) => c.online),
+            anyRunning: _clientsCache.some((c) => c.online && c.running),
+        };
+        if (options.updatePills) setPills(!!options.legacyOnline || summary.anyOnline, !!options.legacyRunning || summary.anyRunning);
+        return summary;
+    }
+
+    function startLiveTick() {
+        if (_liveTickTimer) return;
+        _liveTickTimer = setInterval(() => {
+            if (_clientsCache.length) renderClients(_clientsCache);
+        }, 1000);
     }
 
     let _paused = false;
@@ -512,9 +704,122 @@
         if (!auto || auto.checked) box.scrollTop = box.scrollHeight;
     }
 
+    function logWsUrl() {
+        const u = new URL(getBase() || location.origin, location.href);
+        u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
+        u.pathname = '/ws';
+        u.search = '';
+        u.hash = '';
+        return u.toString();
+    }
+
+    function logWsOpen() {
+        return _logWs && _logWs.readyState === WebSocket.OPEN;
+    }
+
+    function sendLogWs(msg) {
+        if (!logWsOpen()) return false;
+        try {
+            _logWs.send(JSON.stringify(msg));
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function closeLogWs() {
+        if (_logWsReconnect) {
+            clearTimeout(_logWsReconnect);
+            _logWsReconnect = null;
+        }
+        _logWsNextAt = 0;
+        if (_logWs) {
+            const ws = _logWs;
+            _logWs = null;
+            try {
+                ws.onclose = null;
+                ws.close();
+            } catch (_) {}
+        }
+        _logWsSubscribed = '';
+    }
+
+    function scheduleLogWsReconnect() {
+        _logWsNextAt = Date.now() + 2000;
+        if (_logWsReconnect) return;
+        _logWsReconnect = setTimeout(() => {
+            _logWsReconnect = null;
+            connectLogWs();
+        }, 2000);
+    }
+
+    function subscribeLogWs(force = false) {
+        if (!_logSel) return;
+        if (!force && _logWsSubscribed === _logSel && logWsOpen()) return;
+        if (sendLogWs({ type: 'subscribeLogs', clientId: _logSel, since: _logSince })) {
+            _logWsSubscribed = _logSel;
+            return;
+        }
+        connectLogWs();
+    }
+
+    function handleLogWsMessage(ev) {
+        let msg;
+        try { msg = JSON.parse(ev.data); } catch (_) { return; }
+        if (msg && msg.type === 'clients') {
+            applyClientsSnapshot(msg, { skipSocket: true, updatePills: true });
+            return;
+        }
+        if (!msg || msg.type !== 'logs' || msg.clientId !== _logSel) return;
+        const logs = Array.isArray(msg.logs) ? msg.logs : [];
+        if (logs.length) appendLogs(logs);
+        const lastSeq = Number(msg.lastSeq);
+        if (Number.isFinite(lastSeq)) {
+            _logSince = lastSeq;
+        } else if (logs.length) {
+            _logSince = Number(logs[logs.length - 1].seq) || _logSince;
+        }
+    }
+
+    function connectLogWs() {
+        if (typeof WebSocket === 'undefined') return false;
+        if (Date.now() < _logWsNextAt) return false;
+        const url = logWsUrl();
+        const token = getToken();
+        const key = `${url}|${token}`;
+        if (_logWs && (_logWs.readyState === WebSocket.OPEN || _logWs.readyState === WebSocket.CONNECTING) && _logWs._key === key) {
+            return true;
+        }
+        closeLogWs();
+        try {
+            const ws = new WebSocket(url);
+            ws._key = key;
+            _logWs = ws;
+            ws.onopen = () => {
+                _logWsNextAt = 0;
+                sendLogWs({ type: 'hello', role: 'dashboard', token });
+                subscribeLogWs(true);
+            };
+            ws.onmessage = handleLogWsMessage;
+            ws.onclose = () => {
+                if (_logWs === ws) _logWs = null;
+                _logWsSubscribed = '';
+                scheduleLogWsReconnect();
+            };
+            ws.onerror = () => {
+                try { ws.close(); } catch (_) {}
+            };
+            return true;
+        } catch (_) {
+            scheduleLogWsReconnect();
+            return false;
+        }
+    }
+
     // 선택된 클라의 로그 증분 폴(refreshClients 주기에 묻어서 호출)
     async function pollLogs() {
         if (!_logSel) return;
+        if (logWsOpen()) return;
         try {
             const r = await api(`/logs?clientId=${encodeURIComponent(_logSel)}&since=${_logSince}`);
             const logs = r.logs || [];
@@ -528,34 +833,16 @@
     async function refreshClients() {
         try {
             const data = await api('/clients');
-            if (data.latestClientVersion) _latestVer = data.latestClientVersion; // docs @version 자동 동기화
-            const clients = data.clients || [];
-            // 현재 처리 중인 회차 라벨 매핑용: leased unit을 clientId별로 묶는다(내부망, 가벼운 호출).
-            try {
-                const lu = await api('/units?status=leased');
-                _leasedMap = {};
-                (lu.units || []).forEach((u) => {
-                    if (!u.clientId) return;
-                    (_leasedMap[u.clientId] = _leasedMap[u.clientId] || []).push(u);
-                });
-            } catch (_) { _leasedMap = {}; }
-            renderPool(data.pool || {});
-            updateEtaAndAlerts(data.pool || {});
-            renderClients(clients);
-            // 실시간 로그: 드롭다운 동기화 + 선택 클라 로그 증분 폴
-            updateLogClientOptions(clients);
+            if (!Array.isArray(data.leasedUnits)) {
+                // 구버전 서버 호환: 새 서버는 /clients에 leasedUnits를 같이 내려준다.
+                try {
+                    const lu = await api('/units?status=leased');
+                    data.leasedUnits = lu.units || [];
+                } catch (_) { data.leasedUnits = []; }
+            }
+            const summary = applyClientsSnapshot(data);
             await pollLogs();
-            // 정지 상태 반영 (버튼 라벨 + 배지)
-            _paused = !!data.paused;
-            const btn = $('btn-pause');
-            if (btn) { btn.textContent = _paused ? '▶️ 재개' : '⏸️ 전체 정지'; btn.className = _paused ? 'primary' : 'blue'; }
-            const badge = $('pause-badge');
-            if (badge) badge.textContent = _paused ? '⏸️ 정지됨' : '';
-            // lease 모드 클라이언트의 온라인/실행 상태 합산(상단 pill 반영용)
-            return {
-                anyOnline: clients.some((c) => c.online),
-                anyRunning: clients.some((c) => c.online && c.running),
-            };
+            return summary;
         } catch (e) {
             // 구버전 서버(엔드포인트 없음)면 패널 숨김
             $('pool-panel').style.display = 'none';
@@ -597,7 +884,7 @@
             renderCaptcha(data.captcha);
             renderProgress(report, data.online);
             $('footer').textContent = `서버 시각 ${fmtTime(data.serverTime)} · seq ${data.seq}`;
-            $('conn-info').textContent = `연결됨: ${getBase() || location.origin}`;
+            $('conn-info').textContent = `연결됨: ${getBase() || location.origin} · 업데이트 URL: ${scriptUpdateUrl()}`;
         } catch (e) {
             $('footer').textContent = `연결 실패: ${e.message}`;
         }
@@ -686,6 +973,64 @@
         return `${v}B`;
     }
 
+    function selectedCategory() {
+        return ($('nas-category').value || '').trim() || 'Webtoon';
+    }
+
+    function extractSeriesIdFromFolder(folderName) {
+        const text = String(folderName || '').trim();
+        const bracket = text.match(/^\[([^\]]+)\]/);
+        if (bracket && bracket[1]) return bracket[1].trim();
+        const leading = text.match(/^([0-9A-Za-z_-]+)/);
+        return leading ? leading[1] : '';
+    }
+
+    function pathForCategory(category) {
+        const cat = String(category || '').trim().toLowerCase();
+        if (cat.includes('novel') || cat.includes('book')) return 'novel';
+        if (cat.includes('manga') || cat.includes('manhwa')) return 'manhwa';
+        return 'webtoon';
+    }
+
+    function updateUrlOrigin() {
+        const current = $('nas-update-url').value.trim();
+        if (/^https?:\/\//i.test(current)) {
+            try { return new URL(current).origin; } catch (_) {}
+        }
+        return 'https://sbxh4.com';
+    }
+
+    function buildNasMainUrl() {
+        const series = $('nas-series').value.trim();
+        const seriesId = extractSeriesIdFromFolder(series);
+        if (!seriesId) return toast('NAS 작품 폴더명에서 ID를 찾지 못했습니다');
+        const categoryPath = pathForCategory(selectedCategory());
+        const url = `${updateUrlOrigin()}/${categoryPath}/${encodeURIComponent(seriesId)}`;
+        $('nas-update-url').value = url;
+        localStorage.setItem(LS.nasUpdateUrl, url);
+        toast(`메인 URL 생성: /${categoryPath}/${seriesId}`);
+    }
+
+    function renderNasCriteria(data) {
+        const ratio = parseInt(localStorage.getItem(LS.nasRatio) || $('nas-ratio').value || '50', 10) || 50;
+        return `<div class="nas-criteria">
+            <div><strong>저장 기준</strong> ${esc(data.category || selectedCategory())}/${esc(data.series || $('nas-series').value.trim() || '-')}</div>
+            <div>유효 파일은 같은 회차 번호의 NAS 파일 중, 최대 파일 크기의 ${ratio}% 이상인 파일입니다.</div>
+            <div>재다운로드 대상은 서버 상태가 완료/실패이고 NAS 파일이 누락되었거나 손상 의심인 항목입니다.</div>
+        </div>`;
+    }
+
+    function renderNasUpdateNotice({ id, seriesUrl, series, category }) {
+        const box = $('nas-result');
+        const current = box.innerHTML && !box.querySelector('.empty') ? box.innerHTML : '';
+        box.innerHTML = `<div class="nas-update-card">
+            <strong>업데이트 확인 요청 전송</strong>
+            <div>작품 메인 URL: <span>${esc(seriesUrl)}</span></div>
+            <div>NAS 기준: <span>${esc(category || selectedCategory())}/${esc(series || '-')}</span></div>
+            <div>요청 ID: <span>${esc(id || '-')}</span> · 온라인 클라이언트가 회차 목록을 펼쳐 새 unit을 추가합니다.</div>
+        </div>${current}`;
+    }
+
     function renderNasAudit(data) {
         const box = $('nas-result');
         if (!data || !data.summary) {
@@ -711,7 +1056,8 @@
                 </div>`;
             }).join('')
             : '<div class="empty">누락/손상/실패 항목이 없습니다.</div>';
-        box.innerHTML = `<div class="nas-summary">
+        box.innerHTML = `${renderNasCriteria(data)}
+        <div class="nas-summary">
             <span>NAS 유효 ${s.validFiles}/${s.files}</span>
             <span>서버 unit ${s.units}</span>
             <span>저장 매칭 ${s.stored}</span>
@@ -719,13 +1065,32 @@
             <span>손상 의심 ${s.small}</span>
             <span>재다운로드 ${s.retryable}</span>
         </div>
-        <div class="muted">폴더: ${esc(data.folderUrl || '')} · 기준 ${fmtBytes(data.thresholdBytes || 0)} 이상</div>
+        <div class="muted">폴더: ${esc(data.folderUrl || '')} · 파일 크기 기준 ${fmtBytes(data.thresholdBytes || 0)} 이상</div>
         <div class="nas-rows">${rowHtml}</div>`;
+    }
+
+    async function loadNasCategoryList() {
+        const body = nasPayload();
+        if (!body.webdavUrl) return toast('WebDAV URL을 입력하세요');
+        try {
+            const r = await api('/nas/categories', { method: 'POST', body });
+            const sel = $('nas-category-list');
+            const defaults = ['Webtoon', 'Manga', 'Novel'];
+            const list = Array.from(new Set([...(r.categories || []), ...defaults]));
+            sel.innerHTML = list.length
+                ? '<option value="">카테고리 선택</option>' + list.map((name) => `<option value="${esc(name)}">${esc(name)}</option>`).join('')
+                : '<option value="">카테고리 없음</option>';
+            if (body.category) sel.value = body.category;
+            toast(`${(r.categories || []).length}개 카테고리 폴더`);
+        } catch (e) {
+            toast('NAS 카테고리 조회 실패: ' + e.message);
+        }
     }
 
     async function loadNasSeriesList() {
         const body = nasPayload();
         if (!body.webdavUrl) return toast('WebDAV URL을 입력하세요');
+        if (!body.category) return toast('카테고리 폴더를 선택하세요');
         try {
             const r = await api('/nas/series', { method: 'POST', body });
             const sel = $('nas-series-list');
@@ -778,11 +1143,13 @@
     async function updateNasSeries() {
         const seriesUrl = $('nas-update-url').value.trim();
         const series = $('nas-series').value.trim();
+        const category = selectedCategory();
         localStorage.setItem(LS.nasUpdateUrl, seriesUrl);
         if (!/^https?:\/\//i.test(seriesUrl)) return toast('업데이트용 작품 메인 URL을 입력하세요');
         try {
-            await api('/jobs/expand', { method: 'POST', body: { seriesUrl, series } });
+            const r = await api('/jobs/expand', { method: 'POST', body: { seriesUrl, series } });
             addRecent(seriesUrl, series);
+            renderNasUpdateNotice({ id: r.id, seriesUrl, series, category });
             toast('업데이트 확인 요청 전송');
             setTimeout(refresh, 1500);
         } catch (e) {
@@ -848,6 +1215,7 @@
             $('nas-user').value = localStorage.getItem(LS.nasUser) || '';
             $('nas-pass').value = localStorage.getItem(LS.nasPass) || '';
             $('nas-category').value = localStorage.getItem(LS.nasCategory) || 'Webtoon';
+            $('nas-category-list').value = $('nas-category').value;
             $('nas-ratio').value = localStorage.getItem(LS.nasRatio) || '50';
             $('nas-series').value = localStorage.getItem(LS.nasSeries) || '';
             $('nas-update-url').value = localStorage.getItem(LS.nasUpdateUrl) || '';
@@ -859,6 +1227,7 @@
         localStorage.setItem(LS.token, $('set-token').value.trim());
         localStorage.setItem(LS.poll, String(Math.max(2, parseInt($('set-poll').value, 10) || 3)));
         toast('저장됨');
+        closeLogWs();
         startPolling();
         refresh();
     }
@@ -884,10 +1253,28 @@
         $('btn-requeue-stuck').onclick = () => requeueByStatus('leased', '진행 중');
         $('btn-pause').onclick = togglePause;
         $('btn-clear-pool').onclick = clearPool;
+        $('btn-nas-categories').onclick = loadNasCategoryList;
         $('btn-nas-series').onclick = loadNasSeriesList;
         $('btn-nas-scan').onclick = scanNas;
         $('btn-nas-requeue').onclick = requeueNasSuggested;
         $('btn-nas-update').onclick = updateNasSeries;
+        $('btn-nas-build-url').onclick = buildNasMainUrl;
+        $('nas-category-list').onchange = () => {
+            if ($('nas-category-list').value) {
+                $('nas-category').value = $('nas-category-list').value;
+                localStorage.setItem(LS.nasCategory, $('nas-category').value);
+                $('nas-series').value = '';
+                localStorage.setItem(LS.nasSeries, '');
+                $('nas-series-list').innerHTML = '<option value="">작품 폴더 목록을 다시 불러오세요</option>';
+            }
+        };
+        $('nas-category').onchange = () => {
+            localStorage.setItem(LS.nasCategory, selectedCategory());
+            $('nas-category-list').value = selectedCategory();
+            $('nas-series').value = '';
+            localStorage.setItem(LS.nasSeries, '');
+            $('nas-series-list').innerHTML = '<option value="">작품 폴더 목록을 다시 불러오세요</option>';
+        };
         // 편의 기능 배선
         $('btn-theme').onclick = toggleTheme;
         $('set-notify').onchange = onNotifyToggle;
@@ -907,6 +1294,8 @@
             _logSince = 0;
             localStorage.setItem(LS.logsel, _logSel);
             clearLogStream(_logSel ? `${_logSel} 로그 수신 대기 중…` : '클라이언트를 선택하세요');
+            _logWsSubscribed = '';
+            subscribeLogWs(true);
             pollLogs();
         };
         applyTheme();
@@ -914,6 +1303,7 @@
         renderRecent();
         refresh();
         startPolling();
+        startLiveTick();
     }
 
     document.addEventListener('DOMContentLoaded', init);
