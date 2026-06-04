@@ -93,17 +93,38 @@ function parseMultiStatus(xml) {
     }).filter((e) => e.name);
 }
 
+// 파일명에서 '회차 번호 토큰'을 뽑는다. 저장 규칙은 `<번호토큰> - <제목>.<ext>`이며
+//   번호토큰은 일반 회차 "0123" 또는 외전/특별편 "0123_특별편" 형태(unit.num 그대로).
+//   → ' - ' 앞부분을 통째로 토큰으로 취해 한정자(_특별편)를 보존한다(번호 충돌 방지).
+//   ' - '가 없는 옛/외부 파일은 선두 숫자(소수/범위)만 폴백 추출.
 function numFromFileName(name) {
-    const m = String(name || '').match(/^(\d+(?:[.-]\d+)?)/);
+    let s = String(name || '')
+        .replace(/\.(cbz|cbr|zip|epub|pdf)$/i, '')
+        .trim();
+    if (!s) return '';
+    const dash = s.indexOf(' - ');
+    if (dash >= 0) {
+        const token = s.slice(0, dash).trim();
+        return /^\d/.test(token) ? token : '';
+    }
+    const m = s.match(/^(\d+(?:[.-]\d+)?(?:_\S+)?)/);
     return m ? m[1] : '';
 }
 
+// 회차 키 정규화 — 선두 숫자(소수/범위)는 0 제거해 정규화하되, 뒤따르는 한정자(_특별편 등)는
+//   보존한다. 예) "0123"→"123", "0123_특별편"→"123_특별편", "0123.5"→"123.5".
+//   한정자 보존으로 외전/특별편이 같은 번호의 일반 회차와 충돌(오스킵)하지 않는다.
 export function normalizeEpisodeNumber(n) {
     const s = String(n || '').trim();
     if (!s) return '';
-    const m = s.match(/^0*(\d+)(?:[.-](\d+))?/);
-    if (!m) return s;
-    return m[2] ? `${Number(m[1])}.${Number(m[2])}` : String(Number(m[1]));
+    const m = s.match(/^0*(\d+)(?:[.-](\d+))?(.*)$/);
+    if (!m) return s.toLowerCase();
+    const core = m[2] ? `${Number(m[1])}.${Number(m[2])}` : String(Number(m[1]));
+    const rest = String(m[3] || '')
+        .replace(/^[\s_.-]+/, '')
+        .trim()
+        .toLowerCase();
+    return rest ? `${core}_${rest}` : core;
 }
 
 export async function listNasCategories(opts) {
