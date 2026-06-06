@@ -94,6 +94,8 @@ async function fetchMediaViaWorkerSingleAttempt(episodeUrl, targetType = 'novel'
             // 2. CAPTCHA detected ➡️ Extend timeout to 5 minutes
             if (type === 'CAPTCHA_DETECTED') {
                 console.warn('[WorkerController] ⚠️ 캡차/CF 감지 ➡️ 타임아웃 5분으로 확장');
+                // 서버 보고(텔레그램 알림 + 해당 클라 lease 격리 재투입) 트리거 — remote.js onCaptcha.
+                try { window.dispatchEvent(new CustomEvent('toki:captcha')); } catch (e) {}
                 if (timeoutId) {
                     clearTimeout(timeoutId);
                     timeoutId = setTimeout(() => {
@@ -450,6 +452,9 @@ export function initBatchWorkerController() {
         if (type === 'CAPTCHA_DETECTED') {
             const { queueId } = payload || {};
             let matchedId = queueId;
+
+            // 서버 보고(텔레그램 + 해당 클라 lease 격리 재투입) — matchedId 매칭 여부와 무관하게 항상.
+            try { window.dispatchEvent(new CustomEvent('toki:captcha')); } catch (e) {}
 
             if (!matchedId) {
                 for (const [id, popupRef] of activeWorkers.entries()) {

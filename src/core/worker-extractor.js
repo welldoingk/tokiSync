@@ -89,17 +89,29 @@ export function initWorkerExtractor() {
 
             sendDiagnostics(queueId, 'start-before-captcha');
 
-            // CF Challenge Check
+            // 캡차/CF 챌린지 감지 — Cloudflare Turnstile/managed challenge(최신) + 구형 챌린지 + 캡차 폼.
+            //   구형 마커(cf-challenge-running 등)만으론 요즘 Turnstile("사람인지 확인")을 못 잡아
+            //   놓치므로 challenges.cloudflare.com iframe·.cf-turnstile·#challenge-form 까지 본다.
             const isCloudflare = document.title.includes('Just a moment') ||
-                                 document.getElementById('cf-challenge-running') ||
-                                 document.querySelector('.cf-browser-verification') ||
-                                 document.getElementById('challenge-running');
-            
-            if (isCloudflare) {
-                console.warn("⚠️ [TokiSync:Worker] 클라우드플레어 보안 챌린지 감지 - 대기 모드 진입");
-                const diagnostics = collectLanPageDiagnostics({}, { detectedBy: 'cloudflare' });
-                sendDiagnostics(queueId, 'captcha-detected', {}, { detectedBy: 'cloudflare' });
-                sendToParent('CAPTCHA_DETECTED', { queueId, diagnostics });
+                                 document.title.includes('잠시만 기다') ||
+                                 !!document.getElementById('cf-challenge-running') ||
+                                 !!document.querySelector('.cf-browser-verification') ||
+                                 !!document.getElementById('challenge-running') ||
+                                 !!document.getElementById('challenge-form') ||
+                                 !!document.getElementById('cf-please-wait') ||
+                                 !!document.querySelector('.cf-turnstile') ||
+                                 !!document.querySelector("iframe[src*='challenges.cloudflare.com']");
+            // 구형 게시판 캡차 폼(kCaptcha/hCaptcha/reCAPTCHA) — 메인 경로(waitIframeLoad)와 동일 셋.
+            const isCaptchaForm = !!document.querySelector(
+                "iframe[src*='hcaptcha'], .g-recaptcha, fieldset#captcha, fieldset.captcha, img.captcha_img, img[src*='kcaptcha_image.php'], form[action*='captcha_check.php']"
+            );
+
+            if (isCloudflare || isCaptchaForm) {
+                const detectedBy = isCloudflare ? 'cloudflare' : 'captcha';
+                console.warn(`⚠️ [TokiSync:Worker] 보안 챌린지/캡차 감지(${detectedBy}) - 대기 모드 진입`);
+                const diagnostics = collectLanPageDiagnostics({}, { detectedBy });
+                sendDiagnostics(queueId, 'captcha-detected', {}, { detectedBy });
+                sendToParent('CAPTCHA_DETECTED', { queueId, diagnostics, detectedBy });
                 return;
             }
 

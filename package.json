@@ -2,7 +2,7 @@
   "name": "tokisync",
   "version": "1.22.0",
   "components": {
-    "script": "1.22.0-multi.260604-16",
+    "script": "1.22.0-multi.260606-17",
     "viewer": "1.20.0",
     "gas": "1.9.41"
   },
